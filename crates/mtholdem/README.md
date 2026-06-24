@@ -3,10 +3,9 @@
 Sans-I/O protocol state, authenticated wire artifacts, recovery evidence, and deterministic
 no-limit Texas Hold'em rules for dealerless P2P applications.
 
-The sibling `mental-card-core` crate owns the game-neutral encrypted-card layer. Existing
-`mtholdem::crypto`, `mtholdem::identity`, `mtholdem::error`, and `mtholdem::types` paths remain
-available through the compatibility facade; new non-Hold'em game crates may depend on the core
-directly.
+The sibling `mental-card-core` crate owns the game-neutral encrypted-card layer. Code that needs
+only standard-card cryptography, identities, rosters, or per-deal deck state should depend on that
+crate directly.
 
 `mtholdem` owns the semantics that are not honestly generic: blind and betting rules, two-card
 private receipts, flop/turn/river planning, showdown, side pots, signed public ordering, compact

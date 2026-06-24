@@ -1,4 +1,4 @@
-# Crate boundary decisions for 0.3.0
+# Crate boundary decisions for the initial workspace API
 
 この文書は「なぜこの 3 crate なのか」「次のゲームを追加するとき何を共通化すべきか」を記録します。
 コードを一部だけ読む実装者や AI が、局所的な型名から誤った抽象化を増やさないための設計契約です。
@@ -10,11 +10,13 @@ mental-card-core
     ↑
     └── mtholdem
           ↑
+          ├── mtholdem-peer
           └── mtholdem-testkit
 ```
 
-依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は testkit を知りません。これにより
-production library が deterministic test RNG を誤って取り込む依存 cycle を避けています。
+依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver や testkit を知りません。
+これにより production verification crate が transport loop や deterministic test RNG を誤って取り込む
+依存 cycle を避けています。
 
 ## `mental-card-core` に置く条件
 
@@ -60,7 +62,7 @@ Royale は general functionality を game-rule program `GR` で parameterize し
 - external mediator と off-chain peer の同一判定
 - payout / penalty の exact semantics
 
-したがって 0.3.0 は card crypto operations だけを reusable substrate とし、game execution artifact は
+したがって初回公開 API は card crypto operations だけを reusable substrate とし、game execution artifact は
 Hold'em crate に残します。
 
 ## public-state games は sibling protocol family
@@ -85,7 +87,7 @@ card representation を const generic deck size や arbitrary value type にす�
 しかし現実には、proof CRS、ciphertext count、canonical card encoding、wire bounds、hand evaluator が
 連動します。未使用の generic parameter を公開すると API stability と audit surface を増やします。
 
-0.3.0 では `Card`, `Rank`, `Suit` と 52-card cryptographic deck を core に置きます。別 deck の実装が
+初回公開 API では `Card`, `Rank`, `Suit` と 52-card cryptographic deck を core に置きます。別 deck の実装が
 現れたとき、まず内部 trait で共通化し、test vectors と benchmark で semantic equivalence を確認して
 から public abstraction を検討します。
 
@@ -99,9 +101,18 @@ feature として deterministic key/shuffle helper を公開すると、feature 
 inspection hook はありません。そのため testkit が通ることは、downstream application が実際に利用
 できる API surface の統合確認にもなります。
 
+## peer session を別 crate にした理由
+
+P2P multiplayer には local identity、key share、message ordering、replay rejection、host effects が
+必要です。一方で socket、timer、database、UI は deployment ごとに異なります。`mtholdem-peer` は
+`SignedPublicMessage`、`SignedPrivateReveal`、`HandCryptography`、checkpoint/recovery artifact を
+直接 orchestration し、transport には typed `HostEffect` を返すだけにします。これにより CLI、FFI、
+WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
+
 ## naming
 
-- `mtholdem`: compatibility と product-level intent を表すため維持。
+- `mtholdem`: Texas Hold'em rules/protocol crate であることを表すため維持。
+- `mtholdem-peer`: transport-neutral peer-session orchestration を表すため product prefix を維持。
 - `mental-card-core`: poker 以外にも使えるが、standard-card secret-state protocol であることを表現。
 - `mtholdem-testkit`: Hold'em config と wrapper を含むため product prefix を維持。
 

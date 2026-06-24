@@ -44,6 +44,12 @@ harness without changing the consensus state machines.
        └─────────────────┬─────────────────┘
                          │
                          v
+                  mtholdem-peer
+       ┌───────────────────────────────────┐
+       │ PeerSession + HostEffect          │
+       │ transport-neutral orchestration   │
+       └───────────────────────────────────┘
+
                  mtholdem-testkit
        ┌───────────────────────────────────┐
        │ seeded public-API fixtures        │
@@ -51,14 +57,14 @@ harness without changing the consensus state machines.
 ```
 
 The arrows are compile-time dependencies. `mental-card-core` has no dependency on a game crate;
-`mtholdem` has no dependency on the testkit.
+`mtholdem` has no dependency on peer drivers or the testkit.
 
 ## `mental-card-core`
 
 ### `types`
 
 Strong IDs for sessions, players, seats, deal numbers, card positions, and 32-byte digests. The core
-uses `DealNumber`; the Hold'em crate exposes the compatibility alias `HandNumber`. Financial units
+uses `DealNumber`; the Hold'em crate exposes the domain alias `HandNumber`. Financial units
 and the 2-to-10 table limit remain in `mtholdem::types`.
 
 ### `identity`
@@ -79,7 +85,7 @@ hand-ranking logic.
 
 ### `crypto`
 
-Typed facade over the private Bayer--Groth implementation. It owns serialized-size checks, key
+Typed wrapper over the private Bayer--Groth implementation. It owns serialized-size checks, key
 ownership verification, aggregate keys, shuffle verification, reveal-share verification, and card
 reconstruction. A `VerifiedDeck` is bound to exact aggregate-key membership and threshold count; a
 `VerifiedRevealShare` is bound to the exact deck digest and card position.
@@ -100,9 +106,9 @@ session, roster, and digest to the core.
 
 ### `protocol::HandCryptography`
 
-A thin Hold'em wrapper over `CardCryptography`. It preserves the existing API and adds signed
-private reveals, exactly-two-card private receipts, and the complete showdown acceptance path. Use
-this wrapper from Hold'em applications unless implementing a different game crate.
+A thin Hold'em wrapper over `CardCryptography`. It adds signed private reveals, exactly-two-card
+private receipts, and the complete showdown acceptance path. Use this wrapper from Hold'em
+applications unless implementing a different game crate.
 
 ### `wire`
 
@@ -148,6 +154,18 @@ timeout is a mediator-observed fact, not a self-contained cryptographic proof.
 `TestTable` creates deterministic identities and configuration, then executes genuine key proofs and
 all genuine shuffles through public APIs. It offers no fake proof or unchecked constructor. The
 seeded RNG is deliberately predictable and therefore suitable only for tests.
+
+## `mtholdem-peer`
+
+`PeerSession` owns local peer identity, per-hand key material, transcript ordering, and host effects.
+It emits typed `HostEffect` values such as public broadcasts and persistence requests, but it does
+not open sockets, write storage, or schedule deadlines. The initial slice drives key setup,
+sequential shuffling, private reveal delivery, hole-card receipts, signed betting actions, and
+public community-card reveal shares, board-card opening markers, checkpoint
+certification/announcement, recovery-bundle submission, showdown bundle publication,
+`ShowdownOpen` commitments, deterministic payout agreement, and final-hand effects with real
+`SignedPublicMessage`, `SignedPrivateReveal`, `ShowdownBundle`, `HandCryptography`, `HoldemHand`,
+`CertifiedCheckpoint`, `RecoveryBundle`, and `PublicTranscript` values.
 
 ## Per-hand flow
 

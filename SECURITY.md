@@ -2,7 +2,7 @@
 
 ## Status
 
-The `mtholdem` 0.3.0 workspace is experimental research software. It has not received an independent
+The `mtholdem` 0.1.0 workspace is experimental research software. It has not received an independent
 cryptographic audit, a production penetration test, or a machine-checked proof. Do not treat a
 successful build or test run as evidence that it is safe for real-money play.
 

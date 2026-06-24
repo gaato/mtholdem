@@ -6,7 +6,8 @@ Wire artifacts are deterministic across peers, bounded before allocation, explic
 and safe to hash or sign without a general-purpose serialization framework. The format is not
 intended to be human-readable.
 
-The 0.3.0 crate split does not alter signed bytes. Artifact versions are independent of Cargo package
+The crate split does not make Cargo package versions part of signed bytes. Artifact versions are
+independent of Cargo package
 versions.
 
 ## Common encoding rules
@@ -19,7 +20,7 @@ versions.
 - Canonical encoders are the only bytes that may be signed or hashed.
 - Unknown versions fail closed.
 
-| Artifact | Magic | Version in 0.3.0 |
+| Artifact | Magic | Current version |
 |---|---:|---:|
 | signed public event | `MTHP` | 1 |
 | signed private reveal | `MTHR` | 1 |
@@ -147,9 +148,8 @@ Archival retention remains recommended for audits and dispute forensics.
 ## Core cryptographic serialization
 
 `mental-card-core` owns fixed-width serialization for keys, ciphertext decks, shuffle proofs, reveal
-shares, and reveal proofs. These byte layouts remain the same as in `mtholdem` 0.2.0. They are not
-standalone authenticated wire messages: the game crate must bind them into its session, hand, phase,
-sender, target, and ordering context.
+shares, and reveal proofs. These byte layouts are not standalone authenticated wire messages: the
+game crate must bind them into its session, hand, phase, sender, target, and ordering context.
 
 ## Forward compatibility
 

@@ -1,8 +1,8 @@
 # mtholdem workspace — Mental Texas Hold'em for Rust
 
 このリポジトリは、信頼できるディーラーを置かない P2P Texas Hold'em を実装するための
-**Sans-I/O Rust ワークスペース**です。0.3.0 では、単一 crate だった実装を、再利用可能な
-暗号カード層、Texas Hold'em 固有層、テスト支援層へ分離しました。
+**Sans-I/O Rust ワークスペース**です。初回公開版の API は、再利用可能な暗号カード層、
+Texas Hold'em 固有層、テスト支援層を別 crate として公開します。
 
 > **重要:** これは研究・試作用の未監査ソフトウェアです。独立した暗号監査、形式検証、
 > 本番環境での侵入試験は実施されていません。実金、賞金、換金可能な資産を扱う前に、
@@ -15,12 +15,11 @@
 |---|---|---|
 | [`mental-card-core`](crates/mental-card-core) | 52 枚標準デッキ、identity、roster、しきい値 ElGamal、鍵保有証明、検証可能 shuffle、public/private reveal、1 deal の暗号状態機械 | betting、Hold'em street、wire payload、checkpoint、recovery、settlement |
 | [`mtholdem`](crates/mtholdem) | no-limit Texas Hold'em ルール、deal plan、署名付き wire、public transcript、hole-card receipt、showdown、checkpoint、recovery evidence | socket、timer、database、blockchain 実装 |
+| [`mtholdem-peer`](crates/mtholdem-peer) | peer-local orchestration、public/private artifact routing、host effects、key/shuffle/hole-card/betting/board/checkpoint/recovery/showdown progression | socket、timer、database、UI、placeholder protocol refs |
 | [`mtholdem-testkit`](crates/mtholdem-testkit) | deterministic roster、設定、鍵生成、全員 shuffle の統合テスト fixture | 本番用乱数、検証 bypass、fake proof、秘密値の覗き見 API |
 
-`mtholdem` という名前は残しました。既存利用者にとって最も意味のある facade であり、
-`mtholdem::crypto` と `mtholdem::identity` は core の re-export、`mtholdem::types` は
-互換 facade として維持しています。汎用部分だけを利用する新しいゲーム crate は `mental-card-core` を直接依存
-できます。
+`mtholdem` は Hold'em 固有の rules/protocol crate です。汎用カード暗号、identity、roster、
+deck state machine だけを利用する crate は `mental-card-core` に直接依存してください。
 
 ## どこまで汎用化したか
 
@@ -107,6 +106,7 @@ protocol の feature として混ぜるべきではありません。commit-and-
    [`crates/mtholdem/src/recovery.rs`](crates/mtholdem/src/recovery.rs)
 8. [`crates/mtholdem/src/holdem.rs`](crates/mtholdem/src/holdem.rs) と
    [`crates/mtholdem/src/betting.rs`](crates/mtholdem/src/betting.rs)
+9. [`crates/mtholdem-peer/src/lib.rs`](crates/mtholdem-peer/src/lib.rs)
 
 内部の shuffle 実装は
 [`crates/mental-card-core/src/crypto/bg_shuffle.rs`](crates/mental-card-core/src/crypto/bg_shuffle.rs)
@@ -126,8 +126,8 @@ cargo run --locked -p mtholdem --example simulated_hand
 最小の Hold'em session 設定例です。金額は integer chip unit で、浮動小数点は使用しません。
 
 ```rust
+use mental_card_core::identity::IdentitySecret;
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
-use mtholdem::identity::IdentitySecret;
 use mtholdem::{Chips, Result, SessionId};
 use rand::rngs::OsRng;
 
@@ -182,24 +182,10 @@ let card = hand
 `mtholdem-testkit` の seeded RNG は予測可能です。本番 key や shuffle には絶対に使用しないで
 ください。testkit は別 crate なので、production dependency graph に意図せず入ることも防げます。
 
-## 0.2 からの移行
-
-通常の `mtholdem` 利用コードは、多くの場合 import を変更せずに動作します。core 型を直接使う
-場合は次のどちらかを選べます。
-
-```rust
-use mtholdem::crypto::VerifiedDeck;       // compatibility facade
-use mental_card_core::crypto::VerifiedDeck; // direct core dependency
-```
-
-workspace 化自体、package version 0.3.0、source tree path は breaking change です。wire artifact
-version は変更していません。checkpoint は引き続き format version 2、その他の既存 artifact は
-version 1 です。
-
 ## Security と validation
 
 - threat model と deployment assumptions: [`SECURITY.md`](SECURITY.md)
-- wire compatibility: [`docs/wire-format.md`](docs/wire-format.md)
+- wire formats: [`docs/wire-format.md`](docs/wire-format.md)
 - settlement contract boundary: [`docs/settlement-contract.md`](docs/settlement-contract.md)
 - 実行した検証: [`VALIDATION.md`](VALIDATION.md)
 - 変更履歴: [`CHANGELOG.md`](CHANGELOG.md)

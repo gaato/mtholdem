@@ -1,6 +1,6 @@
 # Security notes for mental-card-core
 
-`mental-card-core` 0.3.0 is experimental and unaudited. It does not inherit a formal proof merely by
+`mental-card-core` 0.1.0 is experimental and unaudited. It does not inherit a formal proof merely by
 using constructions described in the mental-card literature.
 
 Critical assumptions include a CSPRNG, immutable authenticated roster, unique session and deal

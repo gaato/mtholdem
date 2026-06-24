@@ -2,19 +2,25 @@
 
 All notable changes to this project are documented here.
 
-## 0.3.0 - 2026-06-24
+## Unreleased
 
 ### Workspace split
 
 - Converted the single package into a three-crate Cargo workspace.
 - Added `mental-card-core` for game-neutral standard-card identities, rosters, threshold key setup,
   verified shuffles, reveal shares, and per-deal cryptographic orchestration.
-- Kept `mtholdem` as the Texas Hold'em facade and moved betting, deal planning, hand evaluation,
-  signed wire artifacts, transcripts, checkpoints, and recovery evidence into that crate.
+- Kept `mtholdem` as the Texas Hold'em rules/protocol crate and moved betting, deal planning,
+  hand evaluation, signed wire artifacts, transcripts, checkpoints, and recovery evidence into that
+  crate.
+- Added `mtholdem-peer` as a transport-neutral peer-session crate. Its first slice emits host
+  effects and drives real key setup, sequential shuffle, private reveal delivery, hole-card
+  receipts, signed betting actions, public community-card reveals, checkpoint
+  certification/announcement, recovery-bundle submission, showdown bundle publication,
+  deterministic payout agreement, and final-hand effects through `mtholdem`.
 - Added `mtholdem-testkit` as a separate deterministic integration-fixture crate. It composes only
   public APIs and contains no proof or validation bypass.
 
-### API and compatibility
+### API
 
 - Added `SessionBinding`, which lets a game crate bind an opaque canonical configuration digest into
   every core proof context without exposing game rules to the cryptographic layer.
@@ -22,8 +28,6 @@ All notable changes to this project are documented here.
   `RevealTarget::Private(Seat)` domains.
 - Reimplemented `HandCryptography` as a Hold'em-specific wrapper over `CardCryptography`, retaining
   signed private receipts and showdown verification at the game layer.
-- Preserved existing `mtholdem::crypto`, `mtholdem::identity`, `mtholdem::error`, and
-  `mtholdem::types` paths through documented re-exports.
 - Kept all existing signed artifact versions unchanged: checkpoint state/certificate remain version
   2 and the other existing wire families remain version 1.
 
@@ -47,10 +51,10 @@ All notable changes to this project are documented here.
 - The repository root is now a virtual workspace; the `mtholdem` package lives in
   `crates/mtholdem`.
 - Direct imports of implementation files from the former root `src` tree must use either the
-  `mtholdem` compatibility facade or the new `mental-card-core` crate.
-- All workspace crates are version 0.3.0 and require Rust 1.85.
+  Hold'em crate API or the new `mental-card-core` crate.
+- All workspace crates are version 0.1.0 and require Rust 1.85.
 
-## 0.2.0 - 2026-06-23
+## Internal hardening milestone - 2026-06-23
 
 ### Security hardening
 
@@ -101,7 +105,7 @@ All notable changes to this project are documented here.
 - The standalone private-reveal receipt helper is crate-private. Use
   `HandCryptography::open_private_hand` and retain the returned digest.
 
-## 0.1.0 - 2026-06-23
+## Initial implementation milestone - 2026-06-23
 
 ### Added
 

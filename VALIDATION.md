@@ -1,6 +1,6 @@
 # Validation record
 
-This record applies to the `mtholdem` 0.3.0 three-crate workspace. It documents checks actually
+This record applies to the `mtholdem` 0.1.0 three-crate workspace. It documents checks actually
 performed in the reconstruction environment. Passing them demonstrates build, packaging, and test
 hygiene; it is not an independent cryptographic audit, a formal implementation proof, or a
 production-readiness certification.
@@ -96,9 +96,9 @@ Cargo cannot prepare the publishable `mtholdem` or `mtholdem-testkit` tarball ag
 the exact same-version upstream package is present in that registry. Release automation must publish
 and verify in this order:
 
-1. `mental-card-core` 0.3.0;
-2. `mtholdem` 0.3.0;
-3. `mtholdem-testkit` 0.3.0.
+1. `mental-card-core` 0.1.0;
+2. `mtholdem` 0.1.0;
+3. `mtholdem-testkit` 0.1.0.
 
 Before publication, their package-content manifests were checked with `cargo package --list`; the
 complete source-distribution ZIP is also extracted and tested independently as a workspace.

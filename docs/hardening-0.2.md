@@ -1,6 +1,6 @@
-# Security hardening review for mtholdem 0.2.0
+# Security hardening review
 
-> Historical note for 0.3.0: this review describes the former single-crate layout. The hardened
+> Historical note: this review describes an internal pre-release hardening milestone. The hardened
 > implementation now lives under `crates/mental-card-core/src` and `crates/mtholdem/src`; the
 > security properties and wire-version discussion below remain applicable.
 
@@ -110,9 +110,7 @@ and never award contestable chips to folded seats.
 tests exercise all public cryptographic, wire, checkpoint, and recovery decoders and assert that
 malformed inputs return errors rather than panic.
 
-## Compatibility
-
-This release intentionally bumps the crate to 0.2.0.
+## API and wire effects
 
 - Checkpoint state/certificate format is version 2 and rejects version 1.
 - Public messages, private reveals, showdown bundles, recovery bundles, and equivocation evidence

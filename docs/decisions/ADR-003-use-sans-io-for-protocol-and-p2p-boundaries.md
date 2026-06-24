@@ -16,7 +16,7 @@ Keep production protocol crates Sans-I/O. They may parse bytes, verify signature
 
 ### Built-in network runtime
 - Pros: Faster demo path.
-- Cons: Ties correctness to one transport and duplicates logic for other facades.
+- Cons: Ties correctness to one transport and duplicates logic for other adapters.
 - Rejected: Godot, WASM, and CLI would diverge.
 
 ### Frontend-owned validation
