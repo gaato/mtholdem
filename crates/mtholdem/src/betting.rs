@@ -344,17 +344,14 @@ impl BettingRound {
             .max()
             .unwrap_or(Chips::ZERO);
         let current_bet = maximum_contribution.max(bring_in);
-        let mut pending = Vec::with_capacity(ledger.seat_count());
-        let mut raise_reopened = Vec::with_capacity(ledger.seat_count());
-        let mut last_action_bet = Vec::with_capacity(ledger.seat_count());
-        let mut reopen_increment = Vec::with_capacity(ledger.seat_count());
-        for seat in &ledger.seats {
-            let can_act = seat.status == HandSeatStatus::Playing;
-            pending.push(can_act);
-            raise_reopened.push(can_act);
-            last_action_bet.push(None);
-            reopen_increment.push(ledger.big_blind);
-        }
+        let mut pending: Vec<_> = ledger
+            .seats
+            .iter()
+            .map(|seat| seat.status == HandSeatStatus::Playing)
+            .collect();
+        let mut raise_reopened = pending.clone();
+        let last_action_bet = vec![None; ledger.seat_count()];
+        let reopen_increment = vec![ledger.big_blind; ledger.seat_count()];
 
         // When every opponent is already all-in, a sole actionable player has no
         // decision unless it still owes chips to the current wager.  Avoid requiring
@@ -373,7 +370,7 @@ impl BettingRound {
             raise_reopened[*only] = false;
         }
 
-        let complete = ledger.uncontested_winner().is_some() || !pending.iter().any(|value| *value);
+        let complete = ledger.uncontested_winner().is_some() || !pending.iter().any(|&value| value);
         let next_to_act = if complete {
             None
         } else if pending[first_to_act.index()] {
@@ -859,11 +856,15 @@ pub fn distribute_showdown(
         let equal_share = Chips::from_units(amount.units() / winner_count);
         let remainder =
             usize::try_from(amount.units() % winner_count).expect("remainder fits usize");
-        for (ordinal, winner) in winners.iter().enumerate() {
-            let odd = Chips::from_units(u64::from(ordinal < remainder));
-            let share = equal_share.checked_add(odd)?;
-            payouts[winner.index()] = payouts[winner.index()].checked_add(share)?;
-        }
+        winners
+            .iter()
+            .enumerate()
+            .try_for_each(|(ordinal, winner)| {
+                let odd = Chips::from_units(u64::from(ordinal < remainder));
+                let share = equal_share.checked_add(odd)?;
+                payouts[winner.index()] = payouts[winner.index()].checked_add(share)?;
+                Ok::<_, crate::Error>(())
+            })?;
         awards.push(PotAward { amount, winners });
     }
 

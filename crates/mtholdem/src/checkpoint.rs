@@ -275,17 +275,18 @@ impl CheckpointState {
             if ledger.seat_count() != config.roster().len() {
                 return Err(recovery("checkpoint ledger does not match roster size"));
             }
-            let mut seats = Vec::with_capacity(ledger.seat_count());
-            for index in 0..ledger.seat_count() {
-                let seat = Seat::new(index)?;
-                seats.push(SeatCheckpoint {
-                    seat,
-                    stack: ledger.stack(seat)?,
-                    total_contributed: ledger.total_contributed(seat)?,
-                    street_contributed: ledger.street_contributed(seat)?,
-                    status: ledger.status(seat)?,
-                });
-            }
+            let seats = (0..ledger.seat_count())
+                .map(|index| {
+                    let seat = Seat::new(index)?;
+                    Ok(SeatCheckpoint {
+                        seat,
+                        stack: ledger.stack(seat)?,
+                        total_contributed: ledger.total_contributed(seat)?,
+                        street_contributed: ledger.street_contributed(seat)?,
+                        status: ledger.status(seat)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             (Some(ledger.button()), Some(ledger.big_blind()), seats)
         } else {
             (None, None, Vec::new())
@@ -357,24 +358,25 @@ impl CheckpointState {
                 if !(crate::types::MIN_PLAYERS..=crate::types::MAX_PLAYERS).contains(&seat_count) {
                     return Err(codec("checkpoint seat count is outside supported range"));
                 }
-                let mut seats = Vec::with_capacity(seat_count);
-                for expected_index in 0..seat_count {
-                    let seat = Seat::from_u8(decoder.u8("seat index")?)?;
-                    if seat.index() != expected_index {
-                        return Err(codec("checkpoint seats are not canonical and contiguous"));
-                    }
-                    seats.push(SeatCheckpoint {
-                        seat,
-                        stack: Chips::from_units(decoder.u64("seat stack")?),
-                        total_contributed: Chips::from_units(
-                            decoder.u64("seat total contribution")?,
-                        ),
-                        street_contributed: Chips::from_units(
-                            decoder.u64("seat street contribution")?,
-                        ),
-                        status: decode_status(decoder.u8("seat status")?)?,
-                    });
-                }
+                let seats = (0..seat_count)
+                    .map(|expected_index| {
+                        let seat = Seat::from_u8(decoder.u8("seat index")?)?;
+                        if seat.index() != expected_index {
+                            return Err(codec("checkpoint seats are not canonical and contiguous"));
+                        }
+                        Ok(SeatCheckpoint {
+                            seat,
+                            stack: Chips::from_units(decoder.u64("seat stack")?),
+                            total_contributed: Chips::from_units(
+                                decoder.u64("seat total contribution")?,
+                            ),
+                            street_contributed: Chips::from_units(
+                                decoder.u64("seat street contribution")?,
+                            ),
+                            status: decode_status(decoder.u8("seat status")?)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 (Some(button), Some(big_blind), seats)
             }
             value => {
@@ -388,13 +390,14 @@ impl CheckpointState {
         if board_count > 5 {
             return Err(codec("checkpoint contains more than five board cards"));
         }
-        let mut board = Vec::with_capacity(board_count);
-        for _ in 0..board_count {
-            board.push(OpenBoardCard::new(
-                CardPosition::from_u8(decoder.u8("board card position")?)?,
-                Card::from_index(usize::from(decoder.u8("board card index")?))?,
-            ));
-        }
+        let board = (0..board_count)
+            .map(|_| {
+                Ok(OpenBoardCard::new(
+                    CardPosition::from_u8(decoder.u8("board card position")?)?,
+                    Card::from_index(usize::from(decoder.u8("board card index")?))?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         validate_board(&board)?;
 
         let (encrypted_deck, aggregate_key_digest, aggregate_key_participant_count) =

@@ -65,13 +65,13 @@ impl RecoveryBundle {
         if count > MAX_RECOVERY_MESSAGES {
             return Err(codec("recovery bundle contains too many messages"));
         }
-        let mut messages = Vec::with_capacity(count);
-        for _ in 0..count {
-            messages.push(SignedPublicMessage::from_bytes(decoder.length_prefixed(
-                MAX_PUBLIC_MESSAGE_BYTES,
-                "public recovery message",
-            )?)?);
-        }
+        let messages = (0..count)
+            .map(|_| {
+                SignedPublicMessage::from_bytes(
+                    decoder.length_prefixed(MAX_PUBLIC_MESSAGE_BYTES, "public recovery message")?,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         decoder.finish("recovery bundle")?;
         Ok(Self {
             checkpoint,
