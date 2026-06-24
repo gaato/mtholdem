@@ -1,150 +1,177 @@
-# Crate boundary decisions for the initial workspace API
+# Crate Boundary Decisions for the Initial Workspace API
 
-この文書は「なぜこの crate graph なのか」「次のゲームや wrapper を追加するとき何を共通化すべきか」を記録します。
-コードを一部だけ読む実装者や AI が、局所的な型名から誤った抽象化を増やさないための設計契約です。
+This document records why the crate graph has this shape and what should be
+shared when a new game or wrapper is added. It is a design contract for crate
+boundaries and dependency direction.
 
-## 結論
+## Decision
 
 ```text
 mental-card-core
-    ↑
-    └── mtholdem
-          ↑
-          ├── mtholdem-peer
-          │     ↑
-          │     └── mtholdem-adapter
-          │           ↑
-          │           ├── mtholdem-cli
-          │           └── mtholdem-ffi
-          └── mtholdem-testkit
+    ^
+    `-- mtholdem
+          ^
+          |-- mtholdem-peer
+          |     ^
+          |     `-- mtholdem-adapter
+          |           ^
+          |           |-- mtholdem-cli
+          |           `-- mtholdem-ffi
+          `-- mtholdem-testkit
 ```
 
-依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver、adapter、wrapper、testkit を知りません。
-これにより production verification crate が transport loop や deterministic test RNG を誤って取り込む
-依存 cycle を避けています。
+Dependencies are one-way. Core does not know Hold'em, and `mtholdem` does not
+know the peer driver, adapter, wrappers, or testkit. This avoids dependency
+cycles where the production verification crate accidentally pulls in transport
+loops or deterministic test RNGs.
 
-## `mental-card-core` に置く条件
+## What Belongs in `mental-card-core`
 
-次の全条件を満たす概念だけを core に置きます。
+Only concepts meeting all of these conditions belong in core:
 
-1. card game の betting / turn / payout rule を知らずに invariant を説明できる。
-2. misuse を型または constructor validation で拒否できる。
-3. 少なくとも 2 つの plausible game crate で同じ semantic contract のまま再利用できる。
-4. domain separation に必要な game-specific 値を opaque digest として受け取れる。
+1. Their invariants can be explained without betting, turn, or payout rules.
+2. Misuse can be rejected through types or constructor validation.
+3. At least two plausible game crates can reuse the same semantic contract.
+4. Game-specific values needed for domain separation can be passed as opaque
+   digests.
 
-現在該当するのは roster、identity、standard-card identity、threshold crypto、verified deck、verified
-reveal share、per-deal key/shuffle/reveal orchestration です。
+The current core concepts are rosters, identities, standard-card identities,
+threshold cryptography, verified decks, verified reveal shares, and per-deal
+key/shuffle/reveal orchestration.
 
-`SessionBinding` はこの境界の要です。core は `configuration_digest` の中身を解釈しませんが、全 proof
-context に束縛します。上位ゲーム crate は、roster 以外の consensus-critical immutable value を
-canonical encoding して digest に含める責務を持ちます。
+`SessionBinding` is the key boundary. Core does not interpret
+`configuration_digest`, but it binds that digest into every proof context. A
+higher game crate is responsible for canonicalizing all consensus-critical
+immutable values beyond the roster and including them in that digest.
 
-## `mtholdem` に残す条件
+## What Remains in `mtholdem`
 
-次の概念は Hold'em rule program と一緒に検証しなければ意味を持ちません。
+These concepts only make sense when verified with the Hold'em rule program:
 
-- blind / betting action / street transition
-- hole card が各 seat に 2 枚であること
-- flop/turn/river の position plan
-- public event の phase と payload の対応
-- side pot、eligibility、muck、odd chip
-- checkpoint に必要な ledger state
-- mediator が recovery 中に要求する「次の正しい message」
+- blinds, betting actions, and street transitions;
+- exactly two hole cards per seat;
+- flop/turn/river position plans;
+- public-event phase/payload compatibility;
+- side pots, eligibility, muck, and odd chips;
+- ledger state needed by checkpoints;
+- the next correct message a mediator asks for during recovery.
 
-これらを generic associated type や `Box<dyn GameRules>` にすると、canonical serialization、exhaustive
-validation、mediator parity を別々に実装しやすくなります。現在は concrete type を保ち、次のゲーム
-実装で本当に一致した state model が見つかった時点で小さな共通 crate を抽出します。
+Putting these behind generic associated types or `Box<dyn GameRules>` would make
+canonical serialization, exhaustive validation, and mediator parity easier to
+implement inconsistently. The initial API keeps concrete types. A small shared
+crate should be extracted only after another game demonstrates the same state
+model.
 
-## wire/checkpoint/recovery を先に汎用化しない理由
+## Why Wire, Checkpoint, and Recovery Are Not Generic Yet
 
-Royale は general functionality を game-rule program `GR` で parameterize します。しかし library API
-で「任意の bytecode を受け取れば generic」とするだけでは、UC model の contract verification を
-実装したことにはなりません。実装側には少なくとも次が必要です。
+[ROYALE][paper-royale] parameterizes a general functionality over a game-rule
+program `GR`. Accepting arbitrary bytecode in a library API is not the same
+thing as implementing that contract verifier. An implementation needs at least:
 
-- every transition の deterministic verifier
-- canonical, versioned, bounded artifact
-- game-specific state invariant
-- external mediator と off-chain peer の同一判定
-- payout / penalty の exact semantics
+- a deterministic verifier for every transition;
+- canonical, versioned, bounded artifacts;
+- game-specific state invariants;
+- identical off-chain and mediator judgments;
+- exact payout and penalty semantics.
 
-したがって初回公開 API は card crypto operations だけを reusable substrate とし、game execution artifact は
-Hold'em crate に残します。
+The first public API therefore keeps card cryptographic operations as the
+reusable substrate and leaves game-execution artifacts in the Hold'em crate.
 
-## public-state games は sibling protocol family
+## Public-State Games Are a Sibling Protocol Family
 
-2018/303 が扱う Blackjack / Baccarat のような secret state のないゲームは、カードを暗号化して
-private opening する必要がありません。commit-and-open coin tossing、preprocessed commitment、VRF
-extension などで公開カードを選べます。
+Games such as Blackjack or Baccarat in
+[21 - Bringing Down the Complexity][paper-21] do not need encrypted private
+opening in the same way secret-card Hold'em does. They can select public cards
+with commit-and-open coin tossing, preprocessed commitments, or VRFs.
 
-その実装を `mental-card-core` の feature にすると、次の問題が生じます。
+Adding that protocol family as a `mental-card-core` feature would create several
+problems:
 
-- incompatible security assumptions と state machine が 1 API に混在する。
-- `VerifiedDeck` が「encrypted shuffled deck」と「未公開 value の multiset」の両方を意味してしまう。
-- dependency feature unification により不要な暗号 primitive が入る。
-- caller が game の secret-state requirement を誤って選択しやすい。
+- incompatible security assumptions and state machines in one API;
+- `VerifiedDeck` would mean both "encrypted shuffled deck" and "unopened value
+  multiset";
+- dependency feature unification could pull in irrelevant cryptographic
+  primitives;
+- callers could choose the wrong protocol for the game's secret-state
+  requirement.
 
-将来は例えば `mental-public-card` のような sibling crate として実装し、identity / strong IDs だけを
-さらに小さい crate へ抽出するかを、その時点の実利用に基づいて判断します。
+A future public-state implementation should be a sibling crate such as
+`mental-public-card`. Identity and strong ID types can be extracted into a
+smaller shared crate only after actual use justifies it.
 
-## 標準 52 枚デッキに限定した理由
+[paper-royale]: https://eprint.iacr.org/2018/157
+[paper-21]: https://eprint.iacr.org/2018/303.pdf
 
-card representation を const generic deck size や arbitrary value type にすることは技術的には可能です。
-しかし現実には、proof CRS、ciphertext count、canonical card encoding、wire bounds、hand evaluator が
-連動します。未使用の generic parameter を公開すると API stability と audit surface を増やします。
+## Why the Core Uses a Standard 52-Card Deck
 
-初回公開 API では `Card`, `Rank`, `Suit` と 52-card cryptographic deck を core に置きます。別 deck の実装が
-現れたとき、まず内部 trait で共通化し、test vectors と benchmark で semantic equivalence を確認して
-から public abstraction を検討します。
+Const-generic deck sizes or arbitrary card value types are technically possible,
+but proof CRS, ciphertext count, canonical card encoding, wire bounds, and hand
+evaluation move together. Publishing unused generic parameters would increase
+API stability and audit surface.
 
-## testkit を別 crate にした理由
+The initial public API keeps `Card`, `Rank`, `Suit`, and the 52-card
+cryptographic deck in core. If another deck appears, first factor the internals,
+then consider a public abstraction after test vectors and benchmarks show
+semantic equivalence.
 
-`cfg(test)` の helper は downstream integration test から使えません。一方、production crate の
-feature として deterministic key/shuffle helper を公開すると、feature leakage と本番誤用の危険が
-あります。別 crate なら dependency graph で用途が明示され、`dev-dependencies` にだけ置けます。
+## Why the Testkit Is a Separate Crate
 
-さらに testkit は public API だけを組み合わせます。proof verification bypass や internal secret
-inspection hook はありません。そのため testkit が通ることは、downstream application が実際に利用
-できる API surface の統合確認にもなります。
+`cfg(test)` helpers are unavailable to downstream integration tests. Publishing
+deterministic key/shuffle helpers as a production feature would create feature
+leakage and production misuse risk. A separate crate makes the dependency graph
+explicit and keeps the helpers in `dev-dependencies`.
 
-## peer session を別 crate にした理由
+The testkit composes only public APIs. It does not expose proof-verification
+bypasses or secret-inspection hooks. Passing testkit scenarios also checks that
+the downstream integration surface is usable.
 
-P2P multiplayer には local identity、key share、message ordering、replay rejection、host effects が
-必要です。一方で socket、timer、database、UI は deployment ごとに異なります。`mtholdem-peer` は
-`SignedPublicMessage`、`SignedPrivateReveal`、`HandCryptography`、checkpoint/recovery artifact を
-直接 orchestration し、transport には typed `HostEffect` を返すだけにします。これにより CLI、FFI、
-downstream WASM/npm package、Godot wrapper は同じ Rust-owned peer state を包めます。
+## Why Peer Sessions Are a Separate Crate
 
-## adapter と target wrapper を分けた理由
+P2P multiplayer needs local identity, key shares, message ordering, replay
+rejection, and host effects. Sockets, timers, databases, and UI differ per
+deployment. `mtholdem-peer` orchestrates `SignedPublicMessage`,
+`SignedPrivateReveal`, `HandCryptography`, checkpoint/recovery artifacts, and
+typed `HostEffect` values without owning transport.
 
-CLI、C ABI、downstream WASM package、Godot binding は同じ peer-session state を使いますが、allocator、
-buffer ownership、error reporting、language binding の制約は target ごとに違います。`mtholdem-adapter` は
-`mtholdem-peer` の typed effects と actions を byte-oriented な境界値へ変換する共通層です。
+This lets CLI, FFI, downstream WASM/npm packages, and Godot wrappers share the
+same Rust-owned peer state.
 
-`mtholdem-cli` と `mtholdem-ffi` は adapter の外側だけを担当します。C ABI は opaque handle、ABI
-version、caller-visible buffer ownership を公開し、Rust struct layout は公開しません。WASM/npm
-package はこの workspace には置かず、別 repository から Rust adapter consumer として実装します。
-Godot GDExtension もこの workspace には置かず、別 repository から C ABI consumer として実装します。
+## Why Adapter and Target Wrappers Are Separate
 
-## naming
+CLI, C ABI, downstream WASM packages, and Godot bindings use the same
+peer-session state, but allocator, buffer ownership, error reporting, and
+language binding constraints differ by target. `mtholdem-adapter` translates
+typed `mtholdem-peer` effects and actions into byte-oriented boundary values.
 
-- `mtholdem`: Texas Hold'em rules/protocol crate であることを表すため維持。
-- `mtholdem-peer`: transport-neutral peer-session orchestration を表すため product prefix を維持。
-- `mtholdem-adapter`: target wrapper が共有する byte/event/action/error/status 境界を表すため維持。
-- `mtholdem-cli`: scriptable CLI wrapper であることを表すため維持。
-- `mtholdem-ffi`: C ABI boundary と opaque handle ownership を表すため維持。
-- `mental-card-core`: poker 以外にも使えるが、standard-card secret-state protocol であることを表現。
-- `mtholdem-testkit`: Hold'em config と wrapper を含むため product prefix を維持。
+`mtholdem-cli` and `mtholdem-ffi` own only the outside of that adapter boundary.
+The C ABI exposes opaque handles, ABI versions, and caller-visible buffer
+ownership; it does not expose Rust struct layout. WASM/npm packages should live
+outside this workspace and consume the Rust adapter boundary. Godot GDExtension
+should also live outside this workspace and consume the C ABI.
 
-将来 `mental-card-core` が arbitrary deck / multiple protocol family を持つ保証はありません。名前の
-`core` はこの workspace の dependency core を意味し、全カードゲームの universal framework を宣言
-するものではありません。
+## Naming
 
-## release and versioning
+- `mtholdem`: the Texas Hold'em rules/protocol crate.
+- `mtholdem-peer`: transport-neutral peer-session orchestration.
+- `mtholdem-adapter`: the byte/event/action/error/status boundary shared by
+  target wrappers.
+- `mtholdem-cli`: the scriptable CLI wrapper.
+- `mtholdem-ffi`: the C ABI boundary and opaque-handle owner.
+- `mental-card-core`: the workspace's dependency core for standard-card
+  secret-state protocols, not a universal card-game framework.
+- `mtholdem-testkit`: deterministic fixtures tied to Hold'em configuration and
+  wrappers.
 
-公開対象 crate は同じ workspace version を使います。release order は dependency graph に従い、
-`mental-card-core`、`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、in-workspace target wrappers、
-`mtholdem-testkit` の順に検証します。downstream package の Cargo verification は、依存する同
-version の crate が registry に公開された後に実行します。
+`mental-card-core` does not promise arbitrary decks or multiple protocol
+families. The word `core` means the dependency core of this workspace.
 
-wire version は crate version と独立です。crate split だけでは signed bytes を変えず、signed meaning
-が変わる場合のみ artifact version を上げます。
+## Release and Versioning
+
+Public workspace crates use the same workspace version. Release validation
+follows the dependency graph: `mental-card-core`, `mtholdem`, `mtholdem-peer`,
+`mtholdem-adapter`, in-workspace target wrappers, then `mtholdem-testkit`.
+Downstream package verification runs only after its same-version dependency
+crates are available from the registry.
+
+Wire versions are independent from crate versions. A crate split does not change
+signed bytes. Artifact versions change only when signed meaning changes.

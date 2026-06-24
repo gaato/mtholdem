@@ -49,10 +49,11 @@ Follow Rust API Guidelines and keep `unsafe` forbidden. Use strong domain types
 for seats, players, cards, sessions, hands, digests, and chip values. Prefer
 typed constructors over unchecked integers or raw byte vectors.
 
-Write comments and Rustdoc for local AI readability, not prose mirrors. Future
-agents may inspect one item and infer too much; mark invariants, caller
-obligations, proof-context bindings, protocol risks, and source-of-truth
-boundaries near dependent code. Public APIs need Rustdoc with failure semantics.
+Write comments and Rustdoc for local readability by automated coding tools and
+human maintainers, not prose mirrors. A reader may inspect one item without the
+whole architecture in view; mark invariants, caller obligations,
+proof-context bindings, protocol risks, and source-of-truth boundaries near
+dependent code. Public APIs need Rustdoc with failure semantics.
 
 ## Testing Guidelines
 
@@ -75,10 +76,11 @@ runtime. Do not implement plausible-looking fallback behavior unless it is an
 explicitly designed and tested requirement. Prefer typed errors, diagnostics, or
 clear unsupported-operation messages over silent degradation.
 
-This rule exists because agents tend to preserve momentum by inventing fallback
-paths when the real cause is unclear. In this repository, that is a correctness
-bug: a fallback can hide cheating, desync participants, make transcripts
-unreplayable, or turn a failed proof into a false game state. Failed proof
+This rule exists because automated edits and hurried maintenance can preserve
+momentum by inventing fallback paths when the real cause is unclear. In this
+repository, that is a correctness bug: a fallback can hide cheating, desync
+participants, make transcripts unreplayable, or turn a failed proof into a
+false game state. Failed proof
 verification, unknown wire versions, invalid actions, missing checkpoint
 evidence, unavailable production capabilities, and malformed transcripts must
 fail explicitly unless an ADR and tests define a recovery path.

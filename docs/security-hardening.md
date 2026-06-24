@@ -1,16 +1,15 @@
-# Security hardening review
+# Security Hardening Notes
 
-> Historical note: this review describes an internal pre-release hardening milestone. The hardened
-> implementation now lives under `crates/mental-card-core/src` and `crates/mtholdem/src`; the
-> security properties and wire-version discussion below remain applicable.
+These notes summarize security-sensitive checks that the Rust implementation keeps explicit. They
+are not a formal proof, audit report, or production readiness statement.
 
 ## Scope
 
-This review compared the Rust implementation with the concrete protocol obligations described by
-Kaleidoscope and Royale, then concentrated on trust-boundary mistakes that ordinary happy-path tests
-do not expose: rogue or mismatched keys, proof substitution, replay across positions/decks,
-showdown-share replacement, malformed certified state, betting edge cases, decoder robustness, and
-recovery attribution.
+The implementation is compared against the concrete protocol obligations described by
+[Kaleidoscope][paper-kaleidoscope] and [ROYALE][paper-royale]. The main trust-boundary risks are
+rogue or mismatched keys, proof substitution, replay across positions or decks, showdown-share
+replacement, malformed certified state, betting edge cases, decoder robustness, and recovery
+attribution.
 
 The result is a hardened research prototype, not a proof that the implementation realizes either
 paper's ideal functionality. The external stateful mediator, transport, persistence, endpoint
@@ -142,3 +141,6 @@ The following remain outside the assurance provided by this review:
 
 A deployment handling value should commission independent review of the complete system and create
 cross-implementation test vectors for every artifact and mediator transition before accepting funds.
+
+[paper-kaleidoscope]: https://eprint.iacr.org/2017/899
+[paper-royale]: https://eprint.iacr.org/2018/157

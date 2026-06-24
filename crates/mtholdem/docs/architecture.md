@@ -246,7 +246,10 @@ Do not feed competing message orders into one mutable state machine.
 - Put game-neutral card cryptography in `mental-card-core` only when its invariant is independent of
   game flow.
 - Add new game crates above `SessionBinding` rather than adding untyped callbacks to `mtholdem`.
-- Keep public-state protocols such as the 2018/303 construction in sibling crates.
+- Keep public-state protocols such as
+  [21 - Bringing Down the Complexity][paper-21] in sibling crates.
 - Add cross-game abstraction only after two concrete consumers demonstrate identical semantics.
 - Store application-defined public commitments in `CheckpointState::extension_digest`; do not weaken
   existing checkpoint invariants.
+
+[paper-21]: https://eprint.iacr.org/2018/303.pdf

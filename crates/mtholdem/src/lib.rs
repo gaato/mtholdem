@@ -15,8 +15,8 @@
 //!
 //! This is experimental research software.  It has not received an independent
 //! cryptographic audit or a machine-checked proof, and it does not automatically
-//! inherit the security proofs of Kaleidoscope, Royale, or the card-games-without-
-//! secret-state paper.  Do not use it for real-money play without reviewing the
+//! inherit the security proofs of Kaleidoscope, ROYALE, or the public-state
+//! card-game protocol literature.  Do not use it for real-money play without reviewing the
 //! distributed `SECURITY.md`, auditing the complete deployment, and implementing a
 //! sound external recovery and settlement mechanism.
 //!
@@ -37,10 +37,10 @@
 //!   fixtures and is never a production dependency of this crate.
 //!
 //! The split intentionally stops before attempting a generic checkpoint or generic
-//! game-rule trait.  The three papers show that card operations are composable building
-//! blocks, but they also make the game-rule program and recovery verifier part of the
-//! security statement.  Hiding those semantics behind an unconstrained Rust trait would
-//! create false confidence rather than reusable security.
+//! game-rule trait.  Kaleidoscope and ROYALE treat card operations as composable
+//! building blocks, but also make the game-rule program and recovery verifier part
+//! of the security statement.  Hiding those semantics behind an unconstrained Rust
+//! trait would create false confidence rather than reusable security.
 //!
 //! # Confidential and public channels
 //!
