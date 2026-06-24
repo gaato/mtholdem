@@ -461,6 +461,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtholdem-adapter"
+version = "0.1.0"
+dependencies = [
+ "mental-card-core",
+ "mtholdem",
+ "mtholdem-peer",
+ "mtholdem-testkit",
+ "rand 0.8.6",
+]
+
+[[package]]
 name = "mtholdem-peer"
 version = "0.1.0"
 dependencies = [

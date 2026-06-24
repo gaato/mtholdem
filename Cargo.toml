@@ -2,6 +2,7 @@
 members = [
     "crates/mental-card-core",
     "crates/mtholdem",
+    "crates/mtholdem-adapter",
     "crates/mtholdem-peer",
     "crates/mtholdem-testkit",
 ]
@@ -23,7 +24,9 @@ ark-std = { version = "0.5.0", default-features = false, features = ["std"] }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "fast", "rand_core", "std", "zeroize"] }
 mental-card-core = { version = "0.1.0", path = "crates/mental-card-core" }
 mtholdem = { version = "0.1.0", path = "crates/mtholdem" }
+mtholdem-adapter = { version = "0.1.0", path = "crates/mtholdem-adapter" }
 mtholdem-peer = { version = "0.1.0", path = "crates/mtholdem-peer" }
+mtholdem-testkit = { version = "0.1.0", path = "crates/mtholdem-testkit" }
 proptest = "1.6.0"
 rand = { version = "0.8.5", features = ["getrandom"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
