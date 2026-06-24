@@ -12,6 +12,80 @@
 //! Ownership is explicit at the boundary: buffers returned by this library must be
 //! released with [`mth9_buffer_free`] or [`mth9_effect_free`], and handles returned by
 //! [`mth9_peer_session_new`] must be released with [`mth9_peer_session_free`].
+//!
+//! # Audience and boundary
+//!
+//! This crate is for C-compatible consumers such as C, C++, Zig, Python extensions,
+//! Ruby extensions, and Godot GDExtension wrappers. It does not expose Rust structs,
+//! cryptographic internals, or transport objects. Target-specific wrappers should keep
+//! their own language or engine objects outside this workspace and translate them to
+//! the opaque handles, primitive fields, and byte buffers defined here.
+//!
+//! # Host responsibilities
+//!
+//! The host application is responsible for authenticated public broadcast, confidential
+//! private-message routing, peer discovery, retry and timeout policy, rate limiting,
+//! checkpoint persistence, anti-rollback storage, and any recovery mediator or
+//! settlement contract. A local timeout is only local evidence until the host records
+//! the matching challenge, deadline, and transcript or recovery artifacts.
+//!
+//! # Basic lifecycle
+//!
+//! A typical host creates one handle per local peer, advances or applies protocol
+//! input, drains effects, and frees every object returned by this library:
+//!
+//! ```c
+//! Mth9PeerSession *session = NULL;
+//! int rc = mth9_peer_session_new(config, identity_seed, local_seat, hand, &session);
+//! if (rc != 0) {
+//!     /* Read mth9_last_error_message because no handle may exist. */
+//!     return rc;
+//! }
+//!
+//! rc = mth9_peer_session_progress(session);
+//! if (rc != 0) {
+//!     /* Read mth9_peer_session_last_error(session, ...). */
+//!     mth9_peer_session_free(session);
+//!     return rc;
+//! }
+//!
+//! for (;;) {
+//!     Mth9Effect effect;
+//!     rc = mth9_peer_session_next_effect(session, &effect);
+//!     if (rc == 4) {
+//!         break; /* No queued effect. */
+//!     }
+//!     if (rc != 0) {
+//!         break;
+//!     }
+//!     /* Route, persist, or inspect effect fields here. */
+//!     mth9_effect_free(effect);
+//! }
+//!
+//! mth9_peer_session_free(session);
+//! ```
+//!
+//! # Ownership and allocation
+//!
+//! `Mth9PeerSession` pointers, [`Mth9Buffer`] values, and [`Mth9Effect`] values are
+//! owned by the caller after a successful return. Pass each one back to the matching
+//! free function exactly once. Do not free Rust allocations with the host allocator,
+//! modify `Mth9Buffer.cap`, reuse a freed handle, or copy an owned buffer and free both
+//! copies.
+//!
+//! # Error reporting
+//!
+//! Functions return integer status codes from the shared boundary error-code set. A
+//! zero return means success. `NoEffect` is a normal empty-queue result from
+//! [`mth9_peer_session_next_effect`]. For handle operations, read
+//! [`mth9_peer_session_last_error`] after nonzero failures. For construction failures
+//! where no handle exists, read [`mth9_last_error_message`].
+//!
+//! # Threading
+//!
+//! Treat a peer-session handle as single-threaded mutable state. If a host moves a
+//! handle between threads or exposes it through a language runtime, the host must
+//! serialize calls so that no two FFI functions access the same handle concurrently.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -79,7 +153,8 @@ pub struct Mth9SessionConfig {
 ///
 /// A non-null pointer always represents a Rust allocation owned by the caller until it
 /// is passed back to [`mth9_buffer_free`]. Empty buffers use a null pointer with zero
-/// length and capacity.
+/// length and capacity. The `cap` field is part of the allocation token needed for
+/// freeing; callers must preserve it unchanged.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Mth9Buffer {
@@ -87,7 +162,7 @@ pub struct Mth9Buffer {
     pub ptr: *mut u8,
     /// Number of initialized bytes.
     pub len: usize,
-    /// Allocation capacity retained for `mth9_buffer_free`.
+    /// Allocation capacity retained for `mth9_buffer_free`; do not modify it.
     pub cap: usize,
 }
 
@@ -115,6 +190,10 @@ impl Mth9Buffer {
 }
 
 /// One encoded host effect returned across the C ABI.
+///
+/// After a successful [`mth9_peer_session_next_effect`] call, the caller owns the
+/// buffers embedded in this value and must pass the whole effect to
+/// [`mth9_effect_free`] exactly once.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Mth9Effect {
@@ -462,6 +541,9 @@ pub extern "C" fn mth9_peer_session_status(
 }
 
 /// Pops the next queued host effect into `out_effect`.
+///
+/// `NoEffect` means the queue is empty and is not a protocol failure. On success, the
+/// caller owns the returned effect and must release it with [`mth9_effect_free`].
 #[unsafe(no_mangle)]
 pub extern "C" fn mth9_peer_session_next_effect(
     handle: *mut Mth9PeerSession,
@@ -527,6 +609,8 @@ pub extern "C" fn mth9_peer_session_last_error(
 /// Copies the last thread-local error message into a caller-owned buffer.
 ///
 /// This is primarily for construction failures where no peer-session handle exists yet.
+/// Once a handle exists, prefer [`mth9_peer_session_last_error`] for failures returned
+/// by handle-scoped operations.
 #[unsafe(no_mangle)]
 pub extern "C" fn mth9_last_error_message(
     out_ptr: *mut u8,
