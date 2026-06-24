@@ -163,26 +163,26 @@ impl From<BoundaryEffect> for Mth9Effect {
     fn from(value: BoundaryEffect) -> Self {
         let mut effect = Self::empty();
         effect.kind = boundary_effect_kind_code(value.kind());
-        if let Some(seat) = value.seat() {
+        value.seat().inspect(|seat| {
             effect.has_seat = true;
-            effect.seat = seat;
-        }
+            effect.seat = *seat;
+        });
         if let Some(legal) = value.legal_actions() {
             effect.has_legal_actions = true;
             effect.to_call_units = legal.to_call_units();
-            if let Some(minimum) = legal.minimum_raise_to_units() {
+            legal.minimum_raise_to_units().inspect(|minimum| {
                 effect.has_minimum_raise_to = true;
-                effect.minimum_raise_to_units = minimum;
-            }
+                effect.minimum_raise_to_units = *minimum;
+            });
             effect.maximum_raise_to_units = legal.maximum_raise_to_units();
             effect.raise_reopened = legal.raise_reopened();
             effect.can_check = legal.can_check();
         }
-        if let Some(anchor) = value.transcript_anchor() {
+        value.transcript_anchor().inspect(|anchor| {
             effect.has_transcript_anchor = true;
             effect.next_sequence = anchor.next_sequence();
             effect.transcript_digest = anchor.digest();
-        }
+        });
         if let Some(finished) = value.finished() {
             effect.has_finished = true;
             effect.finished_hand = finished.hand();
@@ -218,19 +218,19 @@ pub struct Mth9PeerStatus {
 
 /// Returns the C ABI major version.
 #[unsafe(no_mangle)]
-pub extern "C" fn mth9_abi_version_major() -> u32 {
+pub const extern "C" fn mth9_abi_version_major() -> u32 {
     ABI_VERSION_MAJOR
 }
 
 /// Returns the C ABI minor version.
 #[unsafe(no_mangle)]
-pub extern "C" fn mth9_abi_version_minor() -> u32 {
+pub const extern "C" fn mth9_abi_version_minor() -> u32 {
     ABI_VERSION_MINOR
 }
 
 /// Returns the C ABI patch version.
 #[unsafe(no_mangle)]
-pub extern "C" fn mth9_abi_version_patch() -> u32 {
+pub const extern "C" fn mth9_abi_version_patch() -> u32 {
     ABI_VERSION_PATCH
 }
 
@@ -434,7 +434,7 @@ pub extern "C" fn mth9_peer_session_status(
             phase: boundary_peer_phase_code(status.phase().into()),
             local_seat: status.local_seat().to_u8(),
             has_next_public_sender: next_public_sender.is_some(),
-            next_public_sender: next_public_sender.map_or(0, Seat::to_u8),
+            next_public_sender: next_public_sender.map_or_else(|| 0, Seat::to_u8),
             next_sequence: anchor.next_sequence(),
             transcript_digest: anchor.digest().to_bytes(),
         };

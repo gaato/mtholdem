@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
+use std::convert::TryInto as _;
 
 use mental_card_core::error::{Result, configuration};
 use mental_card_core::identity::{IDENTITY_PUBLIC_KEY_BYTES, IdentityPublic, IdentitySecret};
@@ -62,7 +63,7 @@ impl WasmSessionConfig {
     /// Creates a primitive WASM-facing session configuration.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
+    pub const fn new(
         session_id: [u8; 32],
         roster_public_keys: Vec<[u8; IDENTITY_PUBLIC_KEY_BYTES]>,
         small_blind_units: u64,
@@ -219,9 +220,9 @@ pub fn parse_roster_public_keys(bytes: &[u8]) -> Result<Vec<[u8; IDENTITY_PUBLIC
     Ok(bytes
         .chunks_exact(IDENTITY_PUBLIC_KEY_BYTES)
         .map(|chunk| {
-            let mut key = [0_u8; IDENTITY_PUBLIC_KEY_BYTES];
-            key.copy_from_slice(chunk);
-            key
+            chunk
+                .try_into()
+                .expect("chunks_exact yields 32-byte public keys")
         })
         .collect())
 }

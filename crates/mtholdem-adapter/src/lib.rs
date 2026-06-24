@@ -268,7 +268,7 @@ impl BoundaryAction {
 
     /// Converts this boundary value into the canonical rules-engine action.
     #[must_use]
-    pub fn to_bet_action(self) -> BetAction {
+    pub const fn to_bet_action(self) -> BetAction {
         match self.kind {
             BoundaryActionKind::Fold => BetAction::Fold,
             BoundaryActionKind::Check => BetAction::Check,
@@ -650,12 +650,14 @@ mod tests {
         peer.progress(table.rng_mut())?;
         let effects = encode_effects(peer.drain_effects())?;
 
-        assert!(effects.iter().any(|effect| {
-            effect.kind() == BoundaryEffectKind::BroadcastPublic && !effect.artifact().is_empty()
-        }));
-        assert!(effects.iter().any(|effect| {
-            effect.kind() == BoundaryEffectKind::Persist && effect.transcript_anchor().is_some()
-        }));
+        assert!(effects.iter().any(|effect| matches!(
+            effect.kind(),
+            BoundaryEffectKind::BroadcastPublic
+        ) && !effect.artifact().is_empty()));
+        assert!(effects.iter().any(
+            |effect| matches!(effect.kind(), BoundaryEffectKind::Persist)
+                && effect.transcript_anchor().is_some()
+        ));
         Ok(())
     }
 }
