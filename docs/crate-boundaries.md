@@ -1,6 +1,6 @@
 # Crate boundary decisions for the initial workspace API
 
-この文書は「なぜこの 3 crate なのか」「次のゲームを追加するとき何を共通化すべきか」を記録します。
+この文書は「なぜこの crate graph なのか」「次のゲームや wrapper を追加するとき何を共通化すべきか」を記録します。
 コードを一部だけ読む実装者や AI が、局所的な型名から誤った抽象化を増やさないための設計契約です。
 
 ## 結論
@@ -11,10 +11,16 @@ mental-card-core
     └── mtholdem
           ↑
           ├── mtholdem-peer
+          │     ↑
+          │     └── mtholdem-adapter
+          │           ↑
+          │           ├── mtholdem-cli
+          │           ├── mtholdem-ffi
+          │           └── mtholdem-wasm
           └── mtholdem-testkit
 ```
 
-依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver や testkit を知りません。
+依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver、adapter、wrapper、testkit を知りません。
 これにより production verification crate が transport loop や deterministic test RNG を誤って取り込む
 依存 cycle を避けています。
 
@@ -109,10 +115,25 @@ P2P multiplayer には local identity、key share、message ordering、replay re
 直接 orchestration し、transport には typed `HostEffect` を返すだけにします。これにより CLI、FFI、
 WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
 
+## adapter と target wrapper を分けた理由
+
+CLI、WASM、C ABI、Godot binding は同じ peer-session state を使いますが、allocator、buffer ownership、
+error reporting、language binding の制約は target ごとに違います。`mtholdem-adapter` は
+`mtholdem-peer` の typed effects と actions を byte-oriented な境界値へ変換する共通層です。
+
+`mtholdem-cli`、`mtholdem-ffi`、`mtholdem-wasm` は adapter の外側だけを担当します。C ABI は opaque
+handle、ABI version、caller-visible buffer ownership を公開し、Rust struct layout は公開しません。
+WASM helper は `wasm-bindgen` 固定ではなく Rust wrapper helper に留めます。Godot GDExtension はこの
+workspace には置かず、別 repository から C ABI consumer として実装します。
+
 ## naming
 
 - `mtholdem`: Texas Hold'em rules/protocol crate であることを表すため維持。
 - `mtholdem-peer`: transport-neutral peer-session orchestration を表すため product prefix を維持。
+- `mtholdem-adapter`: target wrapper が共有する byte/event/action/error/status 境界を表すため維持。
+- `mtholdem-cli`: scriptable CLI wrapper であることを表すため維持。
+- `mtholdem-ffi`: C ABI boundary と opaque handle ownership を表すため維持。
+- `mtholdem-wasm`: WASM package 用の helper boundary を表すため維持。
 - `mental-card-core`: poker 以外にも使えるが、standard-card secret-state protocol であることを表現。
 - `mtholdem-testkit`: Hold'em config と wrapper を含むため product prefix を維持。
 
@@ -122,9 +143,10 @@ WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
 
 ## release and versioning
 
-3 crate は同じ workspace version を使います。release order は `mental-card-core`、`mtholdem`、
-`mtholdem-testkit` です。downstream package の Cargo verification は、依存する同 version の crate が
-registry に公開された後に実行します。
+公開対象 crate は同じ workspace version を使います。release order は dependency graph に従い、
+`mental-card-core`、`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、target wrappers、
+`mtholdem-testkit` の順に検証します。downstream package の Cargo verification は、依存する同
+version の crate が registry に公開された後に実行します。
 
 wire version は crate version と独立です。crate split だけでは signed bytes を変えず、signed meaning
 が変わる場合のみ artifact version を上げます。

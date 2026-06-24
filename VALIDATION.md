@@ -1,11 +1,63 @@
 # Validation record
 
-This record applies to the `mtholdem` 0.1.0 three-crate workspace. It documents checks actually
-performed in the reconstruction environment. Passing them demonstrates build, packaging, and test
-hygiene; it is not an independent cryptographic audit, a formal implementation proof, or a
-production-readiness certification.
+This record applies to the current `mtholdem` 0.1.0 eight-crate workspace:
+`mental-card-core`, `mtholdem`, `mtholdem-peer`, `mtholdem-adapter`,
+`mtholdem-cli`, `mtholdem-ffi`, `mtholdem-wasm`, and `mtholdem-testkit`.
+It documents checks actually performed in the reconstruction environment.
+Passing them demonstrates build and test hygiene; it is not an independent
+cryptographic audit, a formal implementation proof, or a production-readiness
+certification.
 
-## Reproduction inputs
+## Current toolchain
+
+```text
+rustc 1.96.0-nightly (900485642 2026-04-08)
+cargo 1.96.0-nightly (101549ddd 2026-04-08)
+rustfmt 1.9.0-nightly (9004856428 2026-04-08)
+clippy 0.1.96 (9004856428 2026-04-08)
+```
+
+The current workspace declares `rust-version = "1.96"` and Rust edition 2024.
+
+## Current commands completed successfully
+
+```text
+cargo fmt --all -- --check
+cargo test --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo doc --locked --workspace --no-deps --all-features
+cargo run --locked -p mtholdem --example simulated_hand
+cargo run --locked -p mtholdem-cli -- smoke-peer
+cargo metadata --locked --format-version 1 --no-deps
+```
+
+## Current observed results
+
+- 53 unit/property/adversarial tests passed across the workspace: 8 core, 32
+  Hold'em, 3 adapter, 3 FFI, 4 peer, 2 testkit, and 1 WASM.
+- Clippy completed for the entire workspace, all targets, and all features with
+  warnings denied.
+- Rustdoc completed for the eight-crate workspace without dependencies.
+- The complete three-player simulation opened a five-card board and conserved
+  the 300-chip supply.
+- The CLI smoke-peer path exercised the adapter/peer boundary and emitted
+  `broadcast-public` and `persist` host effects.
+- `cargo metadata` reported the intended dependency direction:
+  `mental-card-core <- mtholdem <- mtholdem-peer <- mtholdem-adapter <-
+  target wrappers`, with `mtholdem-testkit` outside production dependency
+  graphs.
+
+The test suite covers aggregate-key/deck binding, reveal-share
+deck/position/recipient binding, private-receipt and showdown substitution
+rejection, checkpoint semantics and chip conservation, side-pot conservation,
+all-in edge cases, equivocation attribution, malformed/untrusted decoder input,
+game/core roster-boundary separation, deterministic test fixtures, and complete
+key/shuffle/reveal paths through the peer/session wrappers.
+
+## Historical reconstruction inputs
+
+The following inputs belonged to the earlier source reconstruction and remain as
+provenance for the pre-wrapper workspace.
 
 - Original uploaded source archive SHA-256:
   `1db98265c0dee65b88444e0553e256c1aaf75a0d7dc1236fd9864ffc5f29bc3a`
@@ -16,7 +68,7 @@ production-readiness certification.
 - 21 / Bringing Down the Complexity (2018/303) SHA-256:
   `b77ee3b74efa7cb2adb344172a3a25a92b0ff791ff7e0d7eae88f817c3721315`
 
-## Toolchain
+## Historical toolchain
 
 ```text
 rustc 1.85.0 (4d91de4e4 2025-02-17) (built from a source tarball)
@@ -25,10 +77,10 @@ rustfmt 1.8.0
 clippy 0.1.85
 ```
 
-This historical validation was performed with Rust 1.85. The current workspace declares
-`rust-version = "1.96"` and Rust edition 2024.
+This historical validation was performed with Rust 1.85 before the peer,
+adapter, CLI, FFI, and WASM crates were added.
 
-## Commands completed successfully
+## Historical commands completed successfully
 
 ```text
 cargo fmt --all -- --check
@@ -72,17 +124,17 @@ cargo package --locked -p mental-card-core --allow-dirty
 The environment used an authenticated internal mirror configured outside the source tree. No mirror
 credential or project-local Cargo registry configuration is distributed.
 
-## Observed results
+## Historical observed results
 
 - 42 unit/property/adversarial tests passed in debug mode: 8 core, 32 Hold'em, and 2 testkit.
 - The same 42 tests passed under the optimized release profile.
 - 3 Rustdoc tests passed.
 - Clippy completed for the entire workspace, all targets, and all features with warnings denied.
-- Rustdoc completed for all three crates with warnings denied.
+- Rustdoc completed for the then-current three crates with warnings denied.
 - The complete three-player simulation opened a five-card board and conserved the 300-chip supply.
 - Cargo verified `mental-card-core` from its generated package tree.
 - Cargo package-content lists contained 18 core files, 27 Hold'em files, and 9 testkit files.
-- `cargo metadata` reported exactly the intended dependency direction:
+- `cargo metadata` reported the then-current dependency direction:
   `mental-card-core <- mtholdem <- mtholdem-testkit`.
 
 The test suite covers aggregate-key/deck binding, reveal-share deck/position/recipient binding,
@@ -93,16 +145,20 @@ key/shuffle/reveal path.
 
 ## Packaging caveat
 
-Cargo cannot prepare the publishable `mtholdem` or `mtholdem-testkit` tarball against crates.io until
-the exact same-version upstream package is present in that registry. Release automation must publish
-and verify in this order:
+Cargo cannot prepare a publishable downstream tarball against crates.io until
+the exact same-version upstream package is present in that registry. Release
+automation must publish and verify in dependency order, starting with:
 
 1. `mental-card-core` 0.1.0;
 2. `mtholdem` 0.1.0;
-3. `mtholdem-testkit` 0.1.0.
+3. `mtholdem-peer` 0.1.0;
+4. `mtholdem-adapter` 0.1.0;
+5. target wrappers and `mtholdem-testkit` 0.1.0 as their dependency
+   constraints permit.
 
-Before publication, their package-content manifests were checked with `cargo package --list`; the
-complete source-distribution ZIP is also extracted and tested independently as a workspace.
+Before publication, package-content manifests should be checked with
+`cargo package --list`; the complete source-distribution ZIP should also be
+extracted and tested independently as a workspace.
 
 ## Checks not performed
 
