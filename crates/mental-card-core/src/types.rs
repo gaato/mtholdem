@@ -51,8 +51,8 @@ impl Digest32 {
     #[must_use]
     pub fn hash(domain: &[u8], parts: &[&[u8]]) -> Self {
         let mut hasher = Sha256::new();
-        // This legacy prefix is intentionally retained after the 0.3 crate split.
-        // Changing it would alter every existing session, proof, wire, and checkpoint digest.
+        // This historical prefix is a security domain, not crate branding.
+        // Changing it would alter every session, proof, wire, and checkpoint digest.
         hasher.update(b"mtholdem/digest/v1");
         hasher.update(
             u64::try_from(domain.len())

@@ -3,6 +3,15 @@
 //! The ABI uses opaque handles, primitive values, and explicit byte buffers. Protocol
 //! validation remains in `mtholdem` and `mtholdem-peer`; this crate only translates the
 //! foreign-function boundary.
+//!
+//! C callers own the event loop. They create one opaque handle per local peer, call
+//! progress/apply functions, pop queued effects, and then route or persist the returned
+//! byte buffers. This crate does not open sockets, schedule timers, store checkpoints,
+//! or interpret recovery outcomes.
+//!
+//! Ownership is explicit at the boundary: buffers returned by this library must be
+//! released with [`mth9_buffer_free`] or [`mth9_effect_free`], and handles returned by
+//! [`mth9_peer_session_new`] must be released with [`mth9_peer_session_free`].
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -27,6 +36,9 @@ thread_local! {
 }
 
 /// Opaque peer-session handle owned by the C ABI.
+///
+/// The handle keeps Rust-only state behind a stable pointer: the typed peer session,
+/// its CSPRNG, queued boundary effects, and the last handle-local error message.
 pub struct Mth9PeerSession {
     session: PeerSession,
     rng: OsRng,
@@ -35,6 +47,9 @@ pub struct Mth9PeerSession {
 }
 
 /// Immutable session configuration supplied to `mth9_peer_session_new`.
+///
+/// Pointers are borrowed only for the duration of construction. After the handle is
+/// created, the Rust side owns validated copies of the session id and roster keys.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Mth9SessionConfig {
@@ -61,6 +76,10 @@ pub struct Mth9SessionConfig {
 }
 
 /// Owned byte buffer returned across the C ABI.
+///
+/// A non-null pointer always represents a Rust allocation owned by the caller until it
+/// is passed back to [`mth9_buffer_free`]. Empty buffers use a null pointer with zero
+/// length and capacity.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Mth9Buffer {

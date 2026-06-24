@@ -65,8 +65,8 @@ impl ProofContext {
 /// A secret threshold-ElGamal key share.
 ///
 /// This value is zeroized on drop by the underlying implementation.  It must remain
-/// available for the entire deal, even after a game no longer lets the participant act, because every
-/// participant is needed to reveal later community cards.
+/// available for the entire deal, even after a game no longer lets the participant
+/// act, because every participant is needed to reveal later community cards.
 pub struct MentalSecretKey(bg::SecretKey);
 
 impl fmt::Debug for MentalSecretKey {

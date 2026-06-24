@@ -4,6 +4,11 @@
 //! `mtholdem` state transitions into [`HostEffect`] values that a CLI, browser, Godot
 //! wrapper, relay, or test harness can carry over its own network and persistence
 //! layer.
+//!
+//! The host remains the source of truth for delivery and durability. A peer session
+//! validates artifacts, advances deterministic protocol state, and emits work for the
+//! host; it does not retry messages, pick transport topology, enforce wall-clock
+//! deadlines, or decide settlement penalties.
 
 #![forbid(unsafe_code)]
 
@@ -33,6 +38,10 @@ use rand::{CryptoRng, RngCore};
 /// Effects are deliberately typed around `mtholdem` artifacts. FFI and downstream
 /// WASM or JSON adapters may encode them at their boundary, but the Rust peer layer
 /// keeps the canonical protocol values intact.
+///
+/// Treat this enum as the Sans-I/O contract between protocol state and host
+/// infrastructure: every variant describes work that must happen outside the local
+/// state machine before other peers or durable storage can observe it.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum HostEffect {
@@ -212,6 +221,11 @@ impl PeerStatus {
 /// A `PeerSession` owns local identity and key-share material, verifies every public
 /// artifact through `mtholdem`, and reports host work as effects.  It does not open
 /// sockets, wait on clocks, or write storage.
+///
+/// The session is intentionally single-peer state. A real application runs one handle
+/// per local player, drains [`HostEffect`] values, and feeds received artifacts back
+/// through the `apply_*` methods. Agreement is proven by matching transcript anchors,
+/// not by shared mutable state between peers.
 #[derive(Debug)]
 pub struct PeerSession {
     config: SessionConfig,
@@ -307,7 +321,12 @@ impl PeerSession {
         })
     }
 
-    /// Starts or resumes local progress, emitting a message when it is this peer's turn.
+    /// Starts or resumes local progress until host input is required.
+    ///
+    /// This method may emit several effects in one call when local deterministic steps
+    /// cascade, such as private reveals followed by a receipt. It stops when the next
+    /// transition requires a remote artifact, a host-selected betting action, or no
+    /// more work remains.
     pub fn progress(&mut self, rng: &mut (impl RngCore + CryptoRng)) -> Result<()> {
         loop {
             let emitted = match self.status().phase() {
@@ -449,6 +468,10 @@ impl PeerSession {
     }
 
     /// Captures the current peer-visible state as a checkpoint candidate.
+    ///
+    /// The checkpoint is local evidence until enough roster members sign the identical
+    /// state. Settlement adapters are outside this crate, so their digest is currently
+    /// the all-zero placeholder bound into the canonical checkpoint format.
     pub fn checkpoint_state(&self) -> Result<CheckpointState> {
         CheckpointState::capture(
             &self.config,
@@ -531,6 +554,10 @@ impl PeerSession {
     }
 
     /// Builds recovery evidence from the latest certified checkpoint.
+    ///
+    /// The bundle contains only the suffix after the checkpoint anchor. An external
+    /// mediator can verify that suffix against the checkpoint without trusting this
+    /// peer's in-memory state.
     pub fn recovery_bundle(&self) -> Result<RecoveryBundle> {
         let checkpoint = self
             .latest_checkpoint
@@ -654,6 +681,9 @@ impl PeerSession {
     }
 
     /// Removes and returns all pending host effects in emission order.
+    ///
+    /// Draining is the handoff point to the host event loop. The peer does not remember
+    /// whether a drained effect was actually delivered, persisted, or submitted.
     pub fn drain_effects(&mut self) -> Vec<HostEffect> {
         self.effects.drain(..).collect()
     }
@@ -1542,6 +1572,9 @@ mod tests {
         CallOrCheck,
     }
 
+    // Records host-visible side effects that would normally leave the peer process.
+    // The E2E tests assert these observations so a future refactor cannot merely
+    // converge in memory while forgetting to ask the host to persist or settle.
     #[derive(Default)]
     struct HostObservations {
         persisted_anchors: Vec<Vec<TranscriptAnchor>>,
@@ -1549,6 +1582,9 @@ mod tests {
         recoveries: Vec<(usize, RecoveryBundle)>,
     }
 
+    // In-process Sans-I/O E2E model. It intentionally has no sockets, timers, or
+    // durable storage; the queue below stands in for a reliable host that routes every
+    // emitted artifact to the peer(s) named by the effect.
     struct E2eRun {
         sessions: Vec<PeerSession>,
         observations: HostObservations,
@@ -1674,6 +1710,9 @@ mod tests {
                         legal_actions,
                     } => {
                         assert_eq!(actor.index(), sender_index);
+                        // A real host would ask a UI or bot. The harness answers
+                        // immediately, then drains the follow-up effects that the
+                        // selected action may synchronously produce.
                         let action = match action_policy {
                             ActionPolicy::Fold => BetAction::Fold,
                             ActionPolicy::CallOrCheck if legal_actions.can_check() => {
@@ -1711,6 +1750,8 @@ mod tests {
         let mut rng = StdRng::from_seed([0xA5; 32]);
         let mut queue = VecDeque::new();
 
+        // Kick every local peer once, then let the synthetic host queue deliver
+        // effects until no peer can make further progress.
         for index in 0..sessions.len() {
             sessions[index].progress(&mut rng).unwrap();
             let effects = sessions[index].drain_effects();
@@ -1849,6 +1890,9 @@ mod tests {
             .unwrap();
 
         let mut rng = StdRng::from_seed([0xC7; 32]);
+        // Announcing a checkpoint has two host responsibilities: broadcast the public
+        // digest commitment and persist the full certified checkpoint. The test applies
+        // both explicitly before asking another peer to request recovery from it.
         let announcement = run.sessions[0]
             .drain_effects()
             .into_iter()

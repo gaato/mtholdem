@@ -4,6 +4,11 @@
 //! converts typed [`mtholdem_peer::HostEffect`] values into stable byte-oriented
 //! events while leaving protocol validation, transcript ordering, and game rules in
 //! `mtholdem` and `mtholdem-peer`.
+//!
+//! The adapter is intentionally not a facade over the peer API. It owns only the
+//! primitive shapes that non-Rust consumers need: numeric status codes, optional-seat
+//! fields, and canonical byte buffers. Hosts are still expected to persist anchors,
+//! route public/private artifacts, and decide when to call the typed peer operations.
 
 #![forbid(unsafe_code)]
 
@@ -398,6 +403,11 @@ impl From<FinishedHand> for BoundaryFinishedHand {
 }
 
 /// Byte-oriented host effect shared by CLI, C ABI, engine, and WASM package wrappers.
+///
+/// Only the fields meaningful for [`BoundaryEffectKind`] are populated. Keeping one
+/// flat structure avoids target-specific wrapper logic while preserving the source of
+/// truth: every payload in `artifact` or `checkpoint` is still a canonical `mtholdem`
+/// wire/checkpoint/recovery byte string.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundaryEffect {
     kind: BoundaryEffectKind,
@@ -466,6 +476,10 @@ impl BoundaryEffect {
 }
 
 /// Converts typed peer-session effects into host-boundary effects.
+///
+/// This is the only place that should translate [`HostEffect`] into the target-neutral
+/// byte boundary. New effect variants should be handled here before C, CLI, engine, or
+/// downstream WASM wrappers learn about them.
 pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
     match effect {
         HostEffect::BroadcastPublic(message) => BoundaryEffect::public(&message),
