@@ -160,7 +160,7 @@ impl BoardRevealState {
         Seat::new(self.shares.len()).expect("share sender index fits in a seat")
     }
 
-    fn all_shares_collected(&self, roster_len: usize) -> bool {
+    const fn all_shares_collected(&self, roster_len: usize) -> bool {
         self.shares.len() == roster_len
     }
 
@@ -170,7 +170,7 @@ impl BoardRevealState {
         self.shares.clear();
     }
 
-    fn is_complete(&self) -> bool {
+    const fn is_complete(&self) -> bool {
         self.position_index == self.positions.len()
     }
 }
@@ -320,11 +320,12 @@ impl PeerSession {
                     true
                 }
                 PeerPhase::PrivateReveal => {
-                    let mut emitted = false;
-                    if !self.sent_private_reveals {
+                    let mut emitted = if self.sent_private_reveals {
+                        false
+                    } else {
                         self.emit_local_private_reveals(rng)?;
-                        emitted = true;
-                    }
+                        true
+                    };
                     if self.next_receipt_sender() == Some(self.local_seat)
                         && self.local_receipt_digest.is_some()
                     {
@@ -1439,17 +1440,8 @@ impl PeerSession {
     }
 
     fn checkpoint_phase(&self) -> HandPhase {
-        if let Some(holdem) = &self.holdem {
-            match holdem.progress() {
-                HandProgress::Betting(street) => hand_phase_for_street(street),
-                HandProgress::AwaitingFlop => HandPhase::FlopReveal,
-                HandProgress::AwaitingTurn => HandPhase::TurnReveal,
-                HandProgress::AwaitingRiver => HandPhase::RiverReveal,
-                HandProgress::Showdown => HandPhase::Showdown,
-                _ => HandPhase::Complete,
-            }
-        } else {
-            match self.phase() {
+        self.holdem.as_ref().map_or_else(
+            || match self.phase() {
                 PeerPhase::KeySetup => HandPhase::KeySetup,
                 PeerPhase::Shuffle => HandPhase::Shuffle,
                 PeerPhase::PrivateReveal | PeerPhase::HoleCardsReady => HandPhase::HoleCards,
@@ -1457,8 +1449,16 @@ impl PeerSession {
                 PeerPhase::BoardReveal(phase) => phase,
                 PeerPhase::Showdown => HandPhase::Showdown,
                 PeerPhase::Complete => HandPhase::Complete,
-            }
-        }
+            },
+            |holdem| match holdem.progress() {
+                HandProgress::Betting(street) => hand_phase_for_street(street),
+                HandProgress::AwaitingFlop => HandPhase::FlopReveal,
+                HandProgress::AwaitingTurn => HandPhase::TurnReveal,
+                HandProgress::AwaitingRiver => HandPhase::RiverReveal,
+                HandProgress::Showdown => HandPhase::Showdown,
+                _ => HandPhase::Complete,
+            },
+        )
     }
 
     fn hole_card_receipts(&self) -> Result<HoleCardReceipts> {
@@ -1504,7 +1504,7 @@ impl PeerSession {
     }
 }
 
-fn hand_phase_for_street(street: Street) -> HandPhase {
+const fn hand_phase_for_street(street: Street) -> HandPhase {
     match street {
         Street::Preflop => HandPhase::Preflop,
         Street::Flop => HandPhase::Flop,
