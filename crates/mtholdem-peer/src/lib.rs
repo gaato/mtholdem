@@ -1844,7 +1844,9 @@ mod tests {
             .unwrap();
         let checkpoint = run.sessions[0].certify_checkpoint(votes).unwrap();
         run.sessions[0].drain_effects();
-        run.sessions[0].announce_checkpoint(checkpoint.clone()).unwrap();
+        run.sessions[0]
+            .announce_checkpoint(checkpoint.clone())
+            .unwrap();
 
         let mut rng = StdRng::from_seed([0xC7; 32]);
         let announcement = run.sessions[0]
