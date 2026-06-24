@@ -186,10 +186,10 @@ impl CardCryptography {
     /// Returns the next seat required to shuffle, or `None` when the deck is final.
     #[must_use]
     pub fn next_shuffler(&self) -> Option<Seat> {
-        (self.next_shuffler_index < self.binding.roster().len()).then(|| {
+        (self.next_shuffler_index < self.binding.roster().len()).then_some(
             Seat::new(self.next_shuffler_index)
-                .expect("a validated roster never exceeds the global seat limit")
-        })
+                .expect("a validated roster never exceeds the global seat limit"),
+        )
     }
 
     /// Creates but does not apply the expected seat's shuffle contribution.

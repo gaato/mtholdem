@@ -36,12 +36,12 @@ impl Suit {
         }
     }
 
-    fn from_symbol(symbol: char) -> Option<Self> {
-        match symbol.to_ascii_lowercase() {
-            'c' => Some(Self::Clubs),
-            'd' => Some(Self::Diamonds),
-            'h' => Some(Self::Hearts),
-            's' => Some(Self::Spades),
+    const fn from_symbol(symbol: char) -> Option<Self> {
+        match symbol {
+            'c' | 'C' => Some(Self::Clubs),
+            'd' | 'D' => Some(Self::Diamonds),
+            'h' | 'H' => Some(Self::Hearts),
+            's' | 'S' => Some(Self::Spades),
             _ => None,
         }
     }
@@ -112,8 +112,8 @@ impl Rank {
         }
     }
 
-    fn from_symbol(symbol: char) -> Option<Self> {
-        match symbol.to_ascii_uppercase() {
+    const fn from_symbol(symbol: char) -> Option<Self> {
+        match symbol {
             '2' => Some(Self::Two),
             '3' => Some(Self::Three),
             '4' => Some(Self::Four),
@@ -122,16 +122,16 @@ impl Rank {
             '7' => Some(Self::Seven),
             '8' => Some(Self::Eight),
             '9' => Some(Self::Nine),
-            'T' => Some(Self::Ten),
-            'J' => Some(Self::Jack),
-            'Q' => Some(Self::Queen),
-            'K' => Some(Self::King),
-            'A' => Some(Self::Ace),
+            't' | 'T' => Some(Self::Ten),
+            'j' | 'J' => Some(Self::Jack),
+            'q' | 'Q' => Some(Self::Queen),
+            'k' | 'K' => Some(Self::King),
+            'a' | 'A' => Some(Self::Ace),
             _ => None,
         }
     }
 
-    fn from_value(value: u8) -> Option<Self> {
+    const fn from_value(value: u8) -> Option<Self> {
         match value {
             2 => Some(Self::Two),
             3 => Some(Self::Three),

@@ -203,7 +203,7 @@ impl AggregateMentalKey {
 
     /// Returns the number of key shares required to reveal a card.
     #[must_use]
-    pub fn participant_count(&self) -> usize {
+    pub const fn participant_count(&self) -> usize {
         self.members.len()
     }
 
@@ -298,7 +298,7 @@ impl ShuffleContribution {
 
     /// Consumes the contribution.
     #[must_use]
-    pub fn into_parts(self) -> (EncryptedDeck, ShuffleProof) {
+    pub const fn into_parts(self) -> (EncryptedDeck, ShuffleProof) {
         (self.deck, self.proof)
     }
 }
@@ -705,8 +705,13 @@ impl MentalPoker {
 }
 
 fn require_deck_key(aggregate_key: &AggregateMentalKey, deck: &VerifiedDeck) -> Result<()> {
-    if deck.aggregate_key_digest != aggregate_key.digest
-        || deck.participant_count() != aggregate_key.participant_count()
+    let expected_key_digest = aggregate_key.digest;
+    let actual_key_digest = deck.aggregate_key_digest;
+    let expected_participant_count = aggregate_key.participant_count();
+    let actual_participant_count = deck.participant_count();
+
+    if actual_key_digest != expected_key_digest
+        || actual_participant_count != expected_participant_count
     {
         return Err(cryptography(
             "verified deck is bound to another aggregate mental-poker key",

@@ -74,19 +74,22 @@ impl Roster {
         }
 
         let mut seen = BTreeSet::new();
-        let mut participants = Vec::with_capacity(identities_in_seat_order.len());
-        for (index, identity) in identities_in_seat_order.into_iter().enumerate() {
-            let player_id = identity.player_id();
-            if !seen.insert(player_id) {
-                return Err(configuration(format!(
-                    "duplicate player identity {player_id} in roster"
-                )));
-            }
-            participants.push(Participant {
-                seat: Seat::new(index)?,
-                identity,
-            });
-        }
+        let participants = identities_in_seat_order
+            .into_iter()
+            .enumerate()
+            .map(|(index, identity)| {
+                let player_id = identity.player_id();
+                if !seen.insert(player_id) {
+                    return Err(configuration(format!(
+                        "duplicate player identity {player_id} in roster"
+                    )));
+                }
+                Ok(Participant {
+                    seat: Seat::new(index)?,
+                    identity,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let digest = Self::compute_digest(&participants);
         Ok(Self {
