@@ -12,6 +12,8 @@ peer-session orchestration、byte-oriented adapter boundary、deterministic test
 
 English README: [README.md](README.md)
 
+`main` の API documentation: <https://gaato.github.io/mtholdem/>
+
 ## Workspace 構成
 
 | crate | 用途 |
