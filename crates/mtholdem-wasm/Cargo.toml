@@ -11,7 +11,11 @@ description = "WASM-facing wrapper helpers for mtholdem peer sessions"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+mental-card-core.workspace = true
+mtholdem.workspace = true
 mtholdem-adapter.workspace = true
+mtholdem-peer.workspace = true
+rand.workspace = true
 
 [lints]
 workspace = true

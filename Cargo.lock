@@ -511,7 +511,11 @@ dependencies = [
 name = "mtholdem-wasm"
 version = "0.1.0"
 dependencies = [
+ "mental-card-core",
+ "mtholdem",
  "mtholdem-adapter",
+ "mtholdem-peer",
+ "rand 0.8.6",
 ]
 
 [[package]]
