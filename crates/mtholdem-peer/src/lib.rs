@@ -1836,18 +1836,18 @@ mod tests {
     fn certified_checkpoint_can_be_announced_and_used_for_recovery() {
         let mut run = drive_to_uncontested_finish();
         run.assert_converged();
-        let sessions = &mut run.sessions;
-        let votes = sessions
+        let votes = run
+            .sessions
             .iter()
             .map(PeerSession::sign_checkpoint_vote)
             .collect::<Result<Vec<_>>>()
             .unwrap();
-        let checkpoint = sessions[0].certify_checkpoint(votes).unwrap();
-        sessions[0].drain_effects();
-        sessions[0].announce_checkpoint(checkpoint.clone()).unwrap();
+        let checkpoint = run.sessions[0].certify_checkpoint(votes).unwrap();
+        run.sessions[0].drain_effects();
+        run.sessions[0].announce_checkpoint(checkpoint.clone()).unwrap();
 
         let mut rng = StdRng::from_seed([0xC7; 32]);
-        let announcement = sessions[0]
+        let announcement = run.sessions[0]
             .drain_effects()
             .into_iter()
             .find_map(|effect| match effect {
@@ -1855,7 +1855,7 @@ mod tests {
                 _ => None,
             })
             .expect("checkpoint announcement");
-        for session in sessions.iter_mut().skip(1) {
+        for session in run.sessions.iter_mut().skip(1) {
             session
                 .apply_public_message(announcement.clone(), &mut rng)
                 .unwrap();
@@ -1865,17 +1865,54 @@ mod tests {
             session.drain_effects();
         }
 
-        sessions[1].request_recovery().unwrap();
-        let bundle = sessions[1]
-            .drain_effects()
-            .into_iter()
-            .find_map(|effect| match effect {
-                HostEffect::SubmitRecovery(bundle) => Some(bundle),
-                _ => None,
-            })
-            .expect("recovery bundle");
-        let anchor = bundle.verify(sessions[1].config()).unwrap();
-        assert_eq!(anchor, sessions[1].transcript_anchor());
+        run.sessions[1].request_recovery().unwrap();
+        let effects = run.sessions[1].drain_effects();
+        let mut queue = VecDeque::new();
+        handle_effects(
+            &mut run.sessions,
+            &mut queue,
+            &mut run.observations,
+            &mut rng,
+            1,
+            ActionPolicy::Fold,
+            effects,
+        );
+        while let Some(QueuedEffect::Public {
+            sender_index,
+            message,
+        }) = queue.pop_front()
+        {
+            for index in 0..run.sessions.len() {
+                if index == sender_index {
+                    continue;
+                }
+                run.sessions[index]
+                    .apply_public_message(message.clone(), &mut rng)
+                    .unwrap();
+                let effects = run.sessions[index].drain_effects();
+                handle_effects(
+                    &mut run.sessions,
+                    &mut queue,
+                    &mut run.observations,
+                    &mut rng,
+                    index,
+                    ActionPolicy::Fold,
+                    effects,
+                );
+            }
+        }
+
+        let [(sender_index, bundle)] = run.observations.recoveries.as_slice() else {
+            panic!("expected one recovery bundle submission");
+        };
+        assert_eq!(*sender_index, 1);
+        let anchor = bundle.verify(run.sessions[1].config()).unwrap();
+        assert_eq!(anchor, run.sessions[1].transcript_anchor());
+        assert!(
+            run.sessions
+                .iter()
+                .all(|session| session.transcript_anchor() == anchor)
+        );
         assert_eq!(
             bundle.checkpoint().digest().unwrap(),
             checkpoint.digest().unwrap()
