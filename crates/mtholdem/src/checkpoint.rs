@@ -742,13 +742,13 @@ impl CheckpointState {
         {
             return Err(recovery("checkpoint expected actor exceeds roster"));
         }
-        if let Some(actor) = self.expected_actor {
-            if !self.seats.is_empty() && self.seats[actor.index()].status != HandSeatStatus::Playing
-            {
-                return Err(recovery(
-                    "checkpoint expected actor is not eligible to take a betting action",
-                ));
-            }
+        if let Some(actor) = self.expected_actor
+            && !self.seats.is_empty()
+            && self.seats[actor.index()].status != HandSeatStatus::Playing
+        {
+            return Err(recovery(
+                "checkpoint expected actor is not eligible to take a betting action",
+            ));
         }
         Ok(())
     }

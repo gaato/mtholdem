@@ -25,7 +25,8 @@ rustfmt 1.8.0
 clippy 0.1.85
 ```
 
-The workspace declares `rust-version = "1.85"` and Rust edition 2024.
+This historical validation was performed with Rust 1.85. The current workspace declares
+`rust-version = "1.96"` and Rust edition 2024.
 
 ## Commands completed successfully
 

@@ -52,7 +52,7 @@ All notable changes to this project are documented here.
   `crates/mtholdem`.
 - Direct imports of implementation files from the former root `src` tree must use either the
   Hold'em crate API or the new `mental-card-core` crate.
-- All workspace crates are version 0.1.0 and require Rust 1.85.
+- All workspace crates are version 0.1.0 and require Rust 1.96.
 
 ## Internal hardening milestone - 2026-06-23
 

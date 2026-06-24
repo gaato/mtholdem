@@ -366,11 +366,11 @@ impl BettingRound {
             .enumerate()
             .filter_map(|(index, seat)| (seat.status == HandSeatStatus::Playing).then_some(index))
             .collect();
-        if let [only] = playing_indices.as_slice() {
-            if ledger.seats[*only].street_contributed >= current_bet {
-                pending[*only] = false;
-                raise_reopened[*only] = false;
-            }
+        if let [only] = playing_indices.as_slice()
+            && ledger.seats[*only].street_contributed >= current_bet
+        {
+            pending[*only] = false;
+            raise_reopened[*only] = false;
         }
 
         let complete = ledger.uncontested_winner().is_some() || !pending.iter().any(|value| *value);
@@ -616,15 +616,15 @@ impl BettingRound {
                 }
                 if !self.has_full_wager {
                     self.raise_reopened[index] = true;
-                } else if !self.raise_reopened[index] {
-                    if let Some(last_bet) = self.last_action_bet[index] {
-                        let increase = self
-                            .current_bet
-                            .checked_sub(last_bet)
-                            .expect("current bet never decreases within a round");
-                        if increase >= self.reopen_increment[index] {
-                            self.raise_reopened[index] = true;
-                        }
+                } else if !self.raise_reopened[index]
+                    && let Some(last_bet) = self.last_action_bet[index]
+                {
+                    let increase = self
+                        .current_bet
+                        .checked_sub(last_bet)
+                        .expect("current bet never decreases within a round");
+                    if increase >= self.reopen_increment[index] {
+                        self.raise_reopened[index] = true;
                     }
                 }
             }

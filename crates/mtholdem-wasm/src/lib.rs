@@ -211,7 +211,7 @@ impl WasmPeerSession {
 
 /// Parses public keys from concatenated 32-byte values.
 pub fn parse_roster_public_keys(bytes: &[u8]) -> Result<Vec<[u8; IDENTITY_PUBLIC_KEY_BYTES]>> {
-    if bytes.len() % IDENTITY_PUBLIC_KEY_BYTES != 0 {
+    if !bytes.len().is_multiple_of(IDENTITY_PUBLIC_KEY_BYTES) {
         return Err(configuration(
             "roster public keys must be concatenated 32-byte Ed25519 keys",
         ));

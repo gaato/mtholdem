@@ -474,14 +474,14 @@ impl SignedPublicMessage {
     /// the protocol and rules state machines.
     pub fn validate_declared_structure(&self, roster: &Roster) -> Result<()> {
         self.payload.validate_for_phase(self.phase)?;
-        if let PublicPayload::Payout { payouts } = &self.payload {
-            if payouts.len() != roster.len() {
-                return Err(protocol(format!(
-                    "payout vector has {} entries for a {}-seat roster",
-                    payouts.len(),
-                    roster.len()
-                )));
-            }
+        if let PublicPayload::Payout { payouts } = &self.payload
+            && payouts.len() != roster.len()
+        {
+            return Err(protocol(format!(
+                "payout vector has {} entries for a {}-seat roster",
+                payouts.len(),
+                roster.len()
+            )));
         }
         Ok(())
     }

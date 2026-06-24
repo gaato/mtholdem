@@ -141,10 +141,8 @@ fn evaluate_five(cards: [Card; 5]) -> HandValue {
     }
 
     let straight_high = straight_high(&counts);
-    if flush {
-        if let Some(high) = straight_high {
-            return value(HandCategory::StraightFlush, [high, 0, 0, 0, 0]);
-        }
+    if flush && let Some(high) = straight_high {
+        return value(HandCategory::StraightFlush, [high, 0, 0, 0, 0]);
     }
 
     let mut groups = Vec::with_capacity(5);
