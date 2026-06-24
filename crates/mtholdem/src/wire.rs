@@ -12,14 +12,14 @@ use crate::betting::{BetAction, Street};
 use crate::card::Card;
 use crate::codec::{Decoder, Encoder};
 use crate::config::{Participant, Roster};
-use crate::crypto::{
+use crate::types::{CardPosition, Chips, Digest32, HandNumber, PlayerId, Seat, SessionId};
+use mental_card_core::crypto::{
     ENCRYPTED_DECK_BYTES, EncryptedDeck, KEY_OWNERSHIP_PROOF_BYTES, KeyOwnershipProof,
     MENTAL_PUBLIC_KEY_BYTES, MentalPublicKey, REVEAL_SHARE_BYTES, REVEAL_SHARE_PROOF_BYTES,
     RevealShare, RevealShareProof, SHUFFLE_PROOF_BYTES, ShuffleContribution, ShuffleProof,
 };
-use crate::error::{Result, authentication, codec, protocol};
-use crate::identity::{IDENTITY_SIGNATURE_BYTES, IdentitySecret, IdentitySignature};
-use crate::types::{CardPosition, Chips, Digest32, HandNumber, PlayerId, Seat, SessionId};
+use mental_card_core::error::{Result, authentication, codec, protocol};
+use mental_card_core::identity::{IDENTITY_SIGNATURE_BYTES, IdentitySecret, IdentitySignature};
 
 const PUBLIC_MAGIC: [u8; 4] = *b"MTHP";
 const PRIVATE_MAGIC: [u8; 4] = *b"MTHR";

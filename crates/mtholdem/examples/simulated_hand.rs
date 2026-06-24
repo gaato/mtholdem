@@ -15,14 +15,14 @@
 //! transport, durable transcript storage, deadlines, and an external settlement
 //! mediator. In particular, private reveal messages must use confidential channels.
 
+use mental_card_core::crypto::MentalKeyShare;
+use mental_card_core::identity::IdentitySecret;
 use mtholdem::Result;
 use mtholdem::betting::BetAction;
 use mtholdem::card::Card;
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
-use mtholdem::crypto::MentalKeyShare;
 use mtholdem::deal::DealPlan;
 use mtholdem::holdem::HoldemHand;
-use mtholdem::identity::IdentitySecret;
 use mtholdem::protocol::HandCryptography;
 use mtholdem::types::{CardPosition, Chips, HandNumber, Seat, SessionId};
 use rand::rngs::OsRng;

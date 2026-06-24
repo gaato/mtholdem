@@ -12,8 +12,8 @@ use crate::betting::{
     distribute_showdown, distribute_uncontested,
 };
 use crate::card::{Card, HandValue, evaluate_best};
-use crate::error::{Result, rules};
 use crate::types::{Chips, MAX_PLAYERS, MIN_PLAYERS, Seat};
+use mental_card_core::error::{Result, rules};
 
 /// Public phase of a rules-only Hold'em hand.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

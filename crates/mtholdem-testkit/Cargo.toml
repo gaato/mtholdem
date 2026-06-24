@@ -20,6 +20,7 @@ include = [
 ]
 
 [dependencies]
+mental-card-core.workspace = true
 mtholdem.workspace = true
 rand.workspace = true
 

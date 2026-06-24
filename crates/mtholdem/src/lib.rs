@@ -23,7 +23,8 @@
 //! # Crate boundaries
 //!
 //! - [`mental_card_core`] contains game-independent card identities, signatures,
-//!   threshold keys, verifiable shuffles, reveal shares, and [`core::protocol::CardCryptography`].
+//!   threshold keys, verifiable shuffles, reveal shares, and
+//!   [`mental_card_core::protocol::CardCryptography`].
 //! - This crate's [`protocol::HandCryptography`] adds signed private-card delivery and
 //!   Hold'em showdown commitments.
 //! - [`betting`], [`card`], and [`holdem`] implement deterministic no-limit rules,
@@ -61,8 +62,8 @@
 //! # Example
 //!
 //! ```no_run
+//! use mental_card_core::identity::IdentitySecret;
 //! use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
-//! use mtholdem::identity::IdentitySecret;
 //! use mtholdem::{Chips, Result, SessionId};
 //! use rand::rngs::OsRng;
 //!
@@ -96,16 +97,6 @@
 //! ```
 
 #![forbid(unsafe_code)]
-
-/// Re-export of the game-independent sibling crate.
-///
-/// This keeps advanced users from having to spell a second dependency when extending
-/// the standard-card operations used by Hold'em.
-pub use mental_card_core as core;
-
-// Preserve the 0.2 module paths for the types that moved into the reusable crate.
-#[doc(inline)]
-pub use mental_card_core::{crypto, error, identity};
 
 pub mod betting;
 pub mod card;

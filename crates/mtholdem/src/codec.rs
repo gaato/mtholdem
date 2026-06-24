@@ -4,7 +4,7 @@
 //! integer byte order, and trailing-byte rejection avoids subtle discrepancies
 //! between messages, checkpoints, and recovery evidence.
 
-use crate::error::{Result, codec};
+use mental_card_core::error::{Result, codec};
 
 pub(crate) struct Encoder {
     bytes: Vec<u8>,

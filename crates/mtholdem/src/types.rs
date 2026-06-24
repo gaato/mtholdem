@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use crate::error::{Result, rules};
+use mental_card_core::error::{Result, rules};
 
 #[doc(inline)]
 pub use mental_card_core::types::{CardPosition, Digest32, PlayerId, Seat, SessionId};
@@ -19,8 +19,8 @@ pub const MIN_PLAYERS: usize = 2;
 
 /// Monotonically increasing Hold'em hand number within a session.
 ///
-/// This alias preserves the 0.2 API while the reusable core uses the game-neutral name
-/// [`mental_card_core::types::DealNumber`].
+/// The reusable core calls the same value [`mental_card_core::types::DealNumber`].
+/// Hold'em APIs use this alias so public signatures match the poker domain.
 pub type HandNumber = mental_card_core::types::DealNumber;
 
 /// A non-negative quantity of the table's smallest indivisible chip unit.

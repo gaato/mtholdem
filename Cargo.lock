@@ -437,7 +437,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "mental-card-core"
-version = "0.3.0"
+version = "0.1.0"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "mtholdem"
-version = "0.3.0"
+version = "0.1.0"
 dependencies = [
  "mental-card-core",
  "proptest",
@@ -461,9 +461,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "mtholdem-testkit"
-version = "0.3.0"
+name = "mtholdem-peer"
+version = "0.1.0"
 dependencies = [
+ "mental-card-core",
+ "mtholdem",
+ "rand 0.8.6",
+]
+
+[[package]]
+name = "mtholdem-testkit"
+version = "0.1.0"
+dependencies = [
+ "mental-card-core",
  "mtholdem",
  "rand 0.8.6",
 ]

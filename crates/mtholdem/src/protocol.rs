@@ -22,8 +22,8 @@ use mental_card_core::protocol::{CardCryptography, RevealTarget};
 use rand::{CryptoRng, RngCore};
 
 use crate::config::SessionConfig;
-use crate::identity::IdentitySecret;
 use crate::wire::{PublicPayload, ShowdownBundle, SignedPrivateReveal, private_reveal_receipt};
+use mental_card_core::identity::IdentitySecret;
 
 /// Per-hand cryptographic state for Texas Hold'em.
 ///
@@ -359,8 +359,8 @@ mod tests {
     use super::*;
     use crate::config::{EconomicSecurity, Roster};
     use crate::deal::DealPlan;
-    use crate::identity::IdentitySecret;
     use crate::types::{Chips, SessionId};
+    use mental_card_core::identity::IdentitySecret;
 
     fn config(identities: &[IdentitySecret], rng: &mut StdRng) -> SessionConfig {
         let roster = Roster::new(identities.iter().map(IdentitySecret::public).collect()).unwrap();

@@ -32,9 +32,10 @@
 
 use std::fmt;
 
+use mental_card_core::crypto::{MentalKeyShare, RevealShare, RevealShareProof};
+use mental_card_core::error::configuration;
+use mental_card_core::identity::IdentitySecret;
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
-use mtholdem::crypto::{MentalKeyShare, RevealShare, RevealShareProof};
-use mtholdem::identity::IdentitySecret;
 use mtholdem::protocol::HandCryptography;
 use mtholdem::wire::SignedPrivateReveal;
 use mtholdem::{CardPosition, Chips, HandNumber, Result, Seat, SessionId};
@@ -65,7 +66,7 @@ impl TestTable {
             .collect();
         let roster = Roster::new(identities.iter().map(IdentitySecret::public).collect())?;
         let other_players = u64::try_from(player_count.saturating_sub(1))
-            .map_err(|_| mtholdem::error::configuration("test player count did not fit u64"))?;
+            .map_err(|_| configuration("test player count did not fit u64"))?;
         let compensation = Chips::from_units(101);
         let deposit = compensation.checked_mul(other_players)?;
         let economics =
@@ -105,7 +106,7 @@ impl TestTable {
     pub fn identity(&self, seat: Seat) -> Result<&IdentitySecret> {
         self.identities
             .get(seat.index())
-            .ok_or_else(|| mtholdem::error::configuration(format!("{seat} is outside test roster")))
+            .ok_or_else(|| configuration(format!("{seat} is outside test roster")))
     }
 
     /// Returns the deterministic RNG used by this fixture.
@@ -231,7 +232,7 @@ impl PreparedHand {
     pub fn key_share(&self, seat: Seat) -> Result<&MentalKeyShare> {
         self.keys
             .get(seat.index())
-            .ok_or_else(|| mtholdem::error::configuration(format!("{seat} is outside test roster")))
+            .ok_or_else(|| configuration(format!("{seat} is outside test roster")))
     }
 }
 

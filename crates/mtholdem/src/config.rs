@@ -333,7 +333,7 @@ mod tests {
     use rand::rngs::OsRng;
 
     use super::*;
-    use crate::identity::IdentitySecret;
+    use mental_card_core::identity::IdentitySecret;
 
     fn roster(count: usize) -> Roster {
         let mut rng = OsRng;

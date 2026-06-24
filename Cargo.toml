@@ -2,12 +2,13 @@
 members = [
     "crates/mental-card-core",
     "crates/mtholdem",
+    "crates/mtholdem-peer",
     "crates/mtholdem-testkit",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["OpenAI"]
@@ -20,8 +21,9 @@ ark-secp256k1 = { version = "0.5.0", default-features = false }
 ark-serialize = { version = "0.5.0", default-features = false }
 ark-std = { version = "0.5.0", default-features = false, features = ["std"] }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "fast", "rand_core", "std", "zeroize"] }
-mental-card-core = { version = "0.3.0", path = "crates/mental-card-core" }
-mtholdem = { version = "0.3.0", path = "crates/mtholdem" }
+mental-card-core = { version = "0.1.0", path = "crates/mental-card-core" }
+mtholdem = { version = "0.1.0", path = "crates/mtholdem" }
+mtholdem-peer = { version = "0.1.0", path = "crates/mtholdem-peer" }
 proptest = "1.6.0"
 rand = { version = "0.8.5", features = ["getrandom"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }

@@ -97,7 +97,7 @@ pub use session::{Participant, Roster, SessionBinding};
 #[doc(inline)]
 pub use types::{CardPosition, DealNumber, Digest32, PlayerId, Seat, SessionId};
 
-/// Workspace-private compatibility hooks used by the `mtholdem` sibling crate.
+/// Workspace-private deck restoration hooks used by the `mtholdem` sibling crate.
 ///
 /// This module is public only because Rust has no friend-crate visibility.  Its items
 /// are not a stable downstream API and deliberately do not appear in generated docs.

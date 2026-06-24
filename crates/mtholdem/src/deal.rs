@@ -6,8 +6,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::error::{Result, rules};
 use crate::types::{CardPosition, MAX_PLAYERS, MIN_PLAYERS, Seat};
+use mental_card_core::error::{Result, rules};
 
 /// The two encrypted-deck positions dealt to one seat.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

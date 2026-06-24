@@ -9,10 +9,10 @@
 use crate::checkpoint::{CertifiedCheckpoint, MAX_CHECKPOINT_CERTIFICATE_BYTES};
 use crate::codec::{Decoder, Encoder};
 use crate::config::SessionConfig;
-use crate::error::{Result, codec, recovery};
 use crate::transcript::{TranscriptAnchor, verify_suffix};
 use crate::types::{Digest32, PlayerId};
 use crate::wire::{MAX_PUBLIC_MESSAGE_BYTES, SignedPublicMessage};
+use mental_card_core::error::{Result, codec, recovery};
 
 const BUNDLE_MAGIC: [u8; 4] = *b"MTHB";
 const EQUIVOCATION_MAGIC: [u8; 4] = *b"MTHE";
@@ -235,9 +235,9 @@ mod tests {
     use super::*;
     use crate::checkpoint::{CheckpointState, CheckpointVote};
     use crate::config::{EconomicSecurity, Roster};
-    use crate::identity::IdentitySecret;
     use crate::types::{Chips, HandNumber, Seat, SessionId};
     use crate::wire::{HandPhase, PublicPayload};
+    use mental_card_core::identity::IdentitySecret;
 
     fn setup() -> (SessionConfig, Vec<IdentitySecret>, CertifiedCheckpoint) {
         let mut rng = OsRng;

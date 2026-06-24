@@ -7,9 +7,9 @@
 //! are created internally.
 
 use crate::config::SessionConfig;
-use crate::error::{Result, protocol};
 use crate::types::{Digest32, HandNumber};
 use crate::wire::SignedPublicMessage;
+use mental_card_core::error::{Result, protocol};
 
 /// Compact point from which a public transcript can be replayed.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -178,9 +178,9 @@ mod tests {
 
     use super::*;
     use crate::config::{EconomicSecurity, Roster};
-    use crate::identity::IdentitySecret;
     use crate::types::{Chips, Seat, SessionId};
     use crate::wire::{HandPhase, PublicPayload};
+    use mental_card_core::identity::IdentitySecret;
 
     fn setup() -> (SessionConfig, IdentitySecret, IdentitySecret) {
         let mut rng = OsRng;

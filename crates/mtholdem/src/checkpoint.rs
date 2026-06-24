@@ -12,12 +12,14 @@ use crate::betting::{HandLedger, HandSeatStatus};
 use crate::card::Card;
 use crate::codec::{Decoder, Encoder};
 use crate::config::SessionConfig;
-use crate::crypto::{AggregateMentalKey, ENCRYPTED_DECK_BYTES, EncryptedDeck, VerifiedDeck};
-use crate::error::{Result, authentication, codec, recovery};
-use crate::identity::{IDENTITY_SIGNATURE_BYTES, IdentitySecret, IdentitySignature};
 use crate::transcript::TranscriptAnchor;
 use crate::types::{CardPosition, Chips, Digest32, HandNumber, PlayerId, Seat, SessionId};
 use crate::wire::HandPhase;
+use mental_card_core::crypto::{
+    AggregateMentalKey, ENCRYPTED_DECK_BYTES, EncryptedDeck, VerifiedDeck,
+};
+use mental_card_core::error::{Result, authentication, codec, recovery};
+use mental_card_core::identity::{IDENTITY_SIGNATURE_BYTES, IdentitySecret, IdentitySignature};
 
 const STATE_MAGIC: [u8; 4] = *b"MTHC";
 const CERTIFICATE_MAGIC: [u8; 4] = *b"MTHK";
@@ -1101,8 +1103,8 @@ mod tests {
 
     use super::*;
     use crate::config::{EconomicSecurity, Roster};
-    use crate::crypto::{MentalPoker, ProofContext};
-    use crate::identity::IdentitySecret;
+    use mental_card_core::crypto::{MentalPoker, ProofContext};
+    use mental_card_core::identity::IdentitySecret;
 
     fn setup() -> (SessionConfig, Vec<IdentitySecret>) {
         let mut rng = OsRng;

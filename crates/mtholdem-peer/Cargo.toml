@@ -1,0 +1,25 @@
+[package]
+name = "mtholdem-peer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Transport-neutral peer-session orchestration for mtholdem"
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/mtholdem-peer"
+keywords = ["poker", "mental-poker", "p2p", "protocol"]
+categories = ["cryptography", "game-development", "network-programming"]
+include = [
+    "src/**",
+    "Cargo.toml",
+    "README.md",
+]
+
+[dependencies]
+mental-card-core.workspace = true
+mtholdem.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

@@ -8,8 +8,8 @@
 use std::fmt;
 
 use crate::card::HandValue;
-use crate::error::{Result, configuration, rules};
 use crate::types::{Chips, MAX_PLAYERS, MIN_PLAYERS, Seat};
+use mental_card_core::error::{Result, configuration, rules};
 
 /// A betting street in a Hold'em hand.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -246,10 +246,10 @@ impl HandLedger {
         self.seats
             .iter()
             .enumerate()
-            .filter_map(|(index, seat)| {
+            .filter(|&(_, seat)| {
                 matches!(seat.status, HandSeatStatus::Playing | HandSeatStatus::AllIn)
-                    .then(|| Seat::new(index).expect("table seat is valid"))
             })
+            .map(|(index, _)| Seat::new(index).expect("table seat is valid"))
             .collect()
     }
 
