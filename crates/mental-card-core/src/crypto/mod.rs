@@ -203,7 +203,7 @@ impl AggregateMentalKey {
 
     /// Returns the number of key shares required to reveal a card.
     #[must_use]
-    pub const fn participant_count(&self) -> usize {
+    pub fn participant_count(&self) -> usize {
         self.members.len()
     }
 

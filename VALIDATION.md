@@ -11,24 +11,25 @@ certification.
 ## Current toolchain
 
 ```text
-rustc 1.96.0-nightly (900485642 2026-04-08)
-cargo 1.96.0-nightly (101549ddd 2026-04-08)
-rustfmt 1.9.0-nightly (9004856428 2026-04-08)
-clippy 0.1.96 (9004856428 2026-04-08)
+rustc 1.85.0 (4d91de4e4 2025-02-17)
+cargo 1.85.0 (d73d2caf9 2024-12-31)
+rustfmt 1.8.0
+clippy 0.1.85
 ```
 
-The current workspace declares `rust-version = "1.96"` and Rust edition 2024.
+The current workspace declares `rust-version = "1.85"` and Rust edition 2024.
 
 ## Current commands completed successfully
 
 ```text
-cargo fmt --all -- --check
-cargo test --locked --workspace --all-targets --all-features
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo doc --locked --workspace --no-deps --all-features
-cargo run --locked -p mtholdem --example simulated_hand
-cargo run --locked -p mtholdem-cli -- smoke-peer
-cargo metadata --locked --format-version 1 --no-deps
+cargo +1.85.0 fmt --all -- --check
+cargo +1.85.0 check --locked --workspace --all-targets --all-features
+cargo +1.85.0 test --locked --workspace --all-targets --all-features
+cargo +1.85.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo +1.85.0 doc --locked --workspace --no-deps --all-features
+cargo +1.85.0 run --locked -p mtholdem --example simulated_hand
+cargo +1.85.0 run --locked -p mtholdem-cli -- smoke-peer
+cargo +1.85.0 metadata --locked --format-version 1 --no-deps
 ```
 
 ## Current observed results
@@ -68,7 +69,7 @@ provenance for the pre-wrapper workspace.
 - 21 / Bringing Down the Complexity (2018/303) SHA-256:
   `b77ee3b74efa7cb2adb344172a3a25a92b0ff791ff7e0d7eae88f817c3721315`
 
-## Historical toolchain
+## Earlier reconstruction toolchain
 
 ```text
 rustc 1.85.0 (4d91de4e4 2025-02-17) (built from a source tarball)
@@ -77,8 +78,8 @@ rustfmt 1.8.0
 clippy 0.1.85
 ```
 
-This historical validation was performed with Rust 1.85 before the peer,
-adapter, CLI, FFI, and WASM crates were added.
+This earlier validation was performed with Rust 1.85 before the peer, adapter,
+CLI, FFI, and WASM crates were added.
 
 ## Historical commands completed successfully
 

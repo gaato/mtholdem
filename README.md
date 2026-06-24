@@ -124,7 +124,7 @@ protocol の feature として混ぜるべきではありません。commit-and-
 
 ## Quick start
 
-Rust 1.96 以上が必要です。
+Rust 1.85 以上が必要です。
 
 ```bash
 cargo test --locked --workspace --all-targets --all-features

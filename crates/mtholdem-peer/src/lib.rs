@@ -160,7 +160,7 @@ impl BoardRevealState {
         Seat::new(self.shares.len()).expect("share sender index fits in a seat")
     }
 
-    const fn all_shares_collected(&self, roster_len: usize) -> bool {
+    fn all_shares_collected(&self, roster_len: usize) -> bool {
         self.shares.len() == roster_len
     }
 
@@ -170,7 +170,7 @@ impl BoardRevealState {
         self.shares.clear();
     }
 
-    const fn is_complete(&self) -> bool {
+    fn is_complete(&self) -> bool {
         self.position_index == self.positions.len()
     }
 }
