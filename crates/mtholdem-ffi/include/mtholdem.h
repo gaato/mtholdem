@@ -1,0 +1,198 @@
+#ifndef MTHOLDEM_H
+#define MTHOLDEM_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define MTH_ABI_VERSION_MAJOR 0u
+#define MTH_ABI_VERSION_MINOR 1u
+#define MTH_ABI_VERSION_PATCH 0u
+
+#define MTH_ERROR_SUCCESS 0
+#define MTH_ERROR_NULL_POINTER 1
+#define MTH_ERROR_BUFFER_TOO_SMALL 2
+#define MTH_ERROR_INVALID_ARGUMENT 3
+#define MTH_ERROR_NO_EFFECT 4
+#define MTH_ERROR_CONFIGURATION 10
+#define MTH_ERROR_CODEC 11
+#define MTH_ERROR_AUTHENTICATION 12
+#define MTH_ERROR_CRYPTOGRAPHY 13
+#define MTH_ERROR_RULES 14
+#define MTH_ERROR_PROTOCOL 15
+#define MTH_ERROR_RECOVERY 16
+#define MTH_ERROR_INTERNAL 255
+
+#define MTH_ACTION_FOLD 1u
+#define MTH_ACTION_CHECK 2u
+#define MTH_ACTION_CALL 3u
+#define MTH_ACTION_RAISE_TO 4u
+#define MTH_ACTION_ALL_IN 5u
+
+#define MTH_EFFECT_BROADCAST_PUBLIC 1u
+#define MTH_EFFECT_SEND_PRIVATE 2u
+#define MTH_EFFECT_PERSIST 3u
+#define MTH_EFFECT_REQUEST_ACTION 4u
+#define MTH_EFFECT_SUBMIT_RECOVERY 5u
+#define MTH_EFFECT_PUBLISH_SHOWDOWN_BUNDLE 6u
+#define MTH_EFFECT_FINISHED 7u
+
+#define MTH_PHASE_KEY_SETUP 1u
+#define MTH_PHASE_SHUFFLE 2u
+#define MTH_PHASE_PRIVATE_REVEAL 3u
+#define MTH_PHASE_HOLE_CARDS_READY 4u
+#define MTH_PHASE_BETTING 5u
+#define MTH_PHASE_BOARD_REVEAL 6u
+#define MTH_PHASE_SHOWDOWN 7u
+#define MTH_PHASE_COMPLETE 8u
+
+typedef struct MthPeerSession MthPeerSession;
+
+typedef struct MthSessionConfig {
+    const uint8_t *session_id_ptr;
+    const uint8_t *roster_public_keys_ptr;
+    size_t player_count;
+    uint64_t small_blind_units;
+    uint64_t big_blind_units;
+    uint64_t buy_in_units;
+    uint64_t maximum_hand_loss_units;
+    uint64_t fault_compensation_units;
+    uint64_t security_deposit_units;
+    uint64_t timeout_millis;
+} MthSessionConfig;
+
+typedef struct MthBuffer {
+    uint8_t *ptr;
+    size_t len;
+    size_t cap;
+} MthBuffer;
+
+typedef struct MthEffect {
+    uint32_t kind;
+    bool has_seat;
+    uint8_t seat;
+    bool has_legal_actions;
+    uint64_t to_call_units;
+    bool has_minimum_raise_to;
+    uint64_t minimum_raise_to_units;
+    uint64_t maximum_raise_to_units;
+    bool raise_reopened;
+    bool can_check;
+    bool has_transcript_anchor;
+    uint64_t next_sequence;
+    uint8_t transcript_digest[32];
+    MthBuffer artifact;
+    MthBuffer checkpoint;
+    MthBuffer final_stacks;
+    bool has_finished;
+    uint64_t finished_hand;
+} MthEffect;
+
+typedef struct MthPeerStatus {
+    uint32_t phase;
+    uint8_t local_seat;
+    bool has_next_public_sender;
+    uint8_t next_public_sender;
+    uint64_t next_sequence;
+    uint8_t transcript_digest[32];
+} MthPeerStatus;
+
+typedef struct MthAbiLayout {
+    uint32_t version_major;
+    uint32_t version_minor;
+    uint32_t version_patch;
+    size_t session_config_size;
+    size_t buffer_size;
+    size_t effect_size;
+    size_t peer_status_size;
+    size_t abi_layout_size;
+} MthAbiLayout;
+
+uint32_t mth_abi_version_major(void);
+uint32_t mth_abi_version_minor(void);
+uint32_t mth_abi_version_patch(void);
+
+int32_t mth_abi_layout(MthAbiLayout *out_layout);
+int32_t mth_abi_check_layout(MthAbiLayout layout);
+
+void mth_buffer_free(MthBuffer buffer);
+void mth_effect_free(MthEffect effect);
+
+int32_t mth_peer_session_new(
+    MthSessionConfig config,
+    const uint8_t *local_identity_seed_ptr,
+    uint8_t local_seat,
+    uint64_t hand,
+    MthPeerSession **out_handle);
+
+void mth_peer_session_free(MthPeerSession *handle);
+int32_t mth_peer_session_progress(MthPeerSession *handle);
+
+int32_t mth_peer_session_apply_public(
+    MthPeerSession *handle,
+    const uint8_t *bytes_ptr,
+    size_t bytes_len);
+
+int32_t mth_peer_session_apply_private(
+    MthPeerSession *handle,
+    const uint8_t *bytes_ptr,
+    size_t bytes_len);
+
+int32_t mth_peer_session_apply_checkpoint(
+    MthPeerSession *handle,
+    const uint8_t *bytes_ptr,
+    size_t bytes_len);
+
+int32_t mth_peer_session_announce_checkpoint(
+    MthPeerSession *handle,
+    const uint8_t *bytes_ptr,
+    size_t bytes_len);
+
+int32_t mth_peer_session_apply_showdown(
+    MthPeerSession *handle,
+    const uint8_t *bytes_ptr,
+    size_t bytes_len);
+
+int32_t mth_peer_session_submit_action(
+    MthPeerSession *handle,
+    uint32_t action_kind,
+    uint64_t raise_to_units);
+
+int32_t mth_peer_session_checkpoint_state(
+    MthPeerSession *handle,
+    MthBuffer *out_buffer);
+
+int32_t mth_peer_session_recovery_bundle(
+    MthPeerSession *handle,
+    MthBuffer *out_buffer);
+
+int32_t mth_peer_session_request_recovery(MthPeerSession *handle);
+
+int32_t mth_peer_session_status(
+    MthPeerSession *handle,
+    MthPeerStatus *out_status);
+
+int32_t mth_peer_session_next_effect(
+    MthPeerSession *handle,
+    MthEffect *out_effect);
+
+int32_t mth_peer_session_last_error(
+    MthPeerSession *handle,
+    uint8_t *out_ptr,
+    size_t out_len,
+    size_t *out_required_len);
+
+int32_t mth_last_error_message(
+    uint8_t *out_ptr,
+    size_t out_len,
+    size_t *out_required_len);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

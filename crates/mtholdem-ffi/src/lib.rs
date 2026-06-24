@@ -9,6 +9,10 @@
 //! byte buffers. This crate does not open sockets, schedule timers, store checkpoints,
 //! or interpret recovery outcomes.
 //!
+//! The official C header is distributed as `include/mtholdem.h` in this crate.
+//! Host wrappers should compile against that header instead of hand-maintaining
+//! declarations for structs, functions, constants, or layout checks.
+//!
 //! Ownership is explicit at the boundary: buffers returned by this library must be
 //! released with [`mth_buffer_free`] or [`mth_effect_free`], and handles returned by
 //! [`mth_peer_session_new`] must be released with [`mth_peer_session_free`].
@@ -91,7 +95,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::slice;
@@ -114,6 +118,77 @@ thread_local! {
 }
 
 const PANIC_ERROR_MESSAGE: &str = "Rust panic crossed the C ABI boundary";
+
+/// Operation completed successfully.
+pub const MTH_ERROR_SUCCESS: i32 = BoundaryErrorCode::Success as i32;
+/// A required pointer or handle was null at a host boundary.
+pub const MTH_ERROR_NULL_POINTER: i32 = BoundaryErrorCode::NullPointer as i32;
+/// The caller-provided output buffer was too small.
+pub const MTH_ERROR_BUFFER_TOO_SMALL: i32 = BoundaryErrorCode::BufferTooSmall as i32;
+/// A primitive argument was outside its valid domain.
+pub const MTH_ERROR_INVALID_ARGUMENT: i32 = BoundaryErrorCode::InvalidArgument as i32;
+/// No queued event or optional value was available.
+pub const MTH_ERROR_NO_EFFECT: i32 = BoundaryErrorCode::NoEffect as i32;
+/// Session or table configuration was invalid.
+pub const MTH_ERROR_CONFIGURATION: i32 = BoundaryErrorCode::Configuration as i32;
+/// Wire bytes were malformed, truncated, non-canonical, or too large.
+pub const MTH_ERROR_CODEC: i32 = BoundaryErrorCode::Codec as i32;
+/// Signature, identity, sender, or replay validation failed.
+pub const MTH_ERROR_AUTHENTICATION: i32 = BoundaryErrorCode::Authentication as i32;
+/// Cryptographic proof, encrypted deck, or reveal share validation failed.
+pub const MTH_ERROR_CRYPTOGRAPHY: i32 = BoundaryErrorCode::Cryptography as i32;
+/// Betting or settlement rules rejected the requested transition.
+pub const MTH_ERROR_RULES: i32 = BoundaryErrorCode::Rules as i32;
+/// A valid artifact was unexpected in the current protocol phase.
+pub const MTH_ERROR_PROTOCOL: i32 = BoundaryErrorCode::Protocol as i32;
+/// Checkpoint or recovery evidence validation failed.
+pub const MTH_ERROR_RECOVERY: i32 = BoundaryErrorCode::Recovery as i32;
+/// An internal invariant failed before a typed error could be reported.
+pub const MTH_ERROR_INTERNAL: i32 = BoundaryErrorCode::Internal as i32;
+
+/// Fold the current hand.
+pub const MTH_ACTION_FOLD: u32 = BoundaryActionKind::Fold as u32;
+/// Check when no call is required.
+pub const MTH_ACTION_CHECK: u32 = BoundaryActionKind::Check as u32;
+/// Call the current bet.
+pub const MTH_ACTION_CALL: u32 = BoundaryActionKind::Call as u32;
+/// Raise to the supplied absolute chip amount.
+pub const MTH_ACTION_RAISE_TO: u32 = BoundaryActionKind::RaiseTo as u32;
+/// Commit the remaining stack.
+pub const MTH_ACTION_ALL_IN: u32 = BoundaryActionKind::AllIn as u32;
+
+/// Broadcast one signed public message.
+pub const MTH_EFFECT_BROADCAST_PUBLIC: u32 = BoundaryEffectKind::BroadcastPublic as u32;
+/// Send one signed private reveal to one recipient.
+pub const MTH_EFFECT_SEND_PRIVATE: u32 = BoundaryEffectKind::SendPrivate as u32;
+/// Persist the transcript anchor and optional checkpoint bytes.
+pub const MTH_EFFECT_PERSIST: u32 = BoundaryEffectKind::Persist as u32;
+/// Ask the host for a legal local action.
+pub const MTH_EFFECT_REQUEST_ACTION: u32 = BoundaryEffectKind::RequestAction as u32;
+/// Submit recovery evidence to a mediator.
+pub const MTH_EFFECT_SUBMIT_RECOVERY: u32 = BoundaryEffectKind::SubmitRecovery as u32;
+/// Publish one showdown side artifact.
+pub const MTH_EFFECT_PUBLISH_SHOWDOWN_BUNDLE: u32 =
+    BoundaryEffectKind::PublishShowdownBundle as u32;
+/// Report a final hand result.
+pub const MTH_EFFECT_FINISHED: u32 = BoundaryEffectKind::Finished as u32;
+
+/// Waiting for key announcements.
+pub const MTH_PHASE_KEY_SETUP: u32 = BoundaryPeerPhase::KeySetup as u32;
+/// Waiting for shuffle contributions.
+pub const MTH_PHASE_SHUFFLE: u32 = BoundaryPeerPhase::Shuffle as u32;
+/// Delivering private reveals and receipt commitments.
+pub const MTH_PHASE_PRIVATE_REVEAL: u32 = BoundaryPeerPhase::PrivateReveal as u32;
+/// All hole-card receipts are ready and betting can start.
+pub const MTH_PHASE_HOLE_CARDS_READY: u32 = BoundaryPeerPhase::HoleCardsReady as u32;
+/// A betting action is expected.
+pub const MTH_PHASE_BETTING: u32 = BoundaryPeerPhase::Betting as u32;
+/// Public board-card reveal shares are expected.
+pub const MTH_PHASE_BOARD_REVEAL: u32 = BoundaryPeerPhase::BoardReveal as u32;
+/// Showdown side artifacts are expected.
+pub const MTH_PHASE_SHOWDOWN: u32 = BoundaryPeerPhase::Showdown as u32;
+/// The hand is complete.
+pub const MTH_PHASE_COMPLETE: u32 = BoundaryPeerPhase::Complete as u32;
 
 /// Opaque peer-session handle owned by the C ABI.
 ///
@@ -325,6 +400,43 @@ pub struct MthPeerStatus {
     pub transcript_digest: [u8; 32],
 }
 
+/// ABI version and layout metadata returned across the C ABI.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MthAbiLayout {
+    /// C ABI major version.
+    pub version_major: u32,
+    /// C ABI minor version.
+    pub version_minor: u32,
+    /// C ABI patch version.
+    pub version_patch: u32,
+    /// `sizeof(MthSessionConfig)` for the compiled Rust library.
+    pub session_config_size: usize,
+    /// `sizeof(MthBuffer)` for the compiled Rust library.
+    pub buffer_size: usize,
+    /// `sizeof(MthEffect)` for the compiled Rust library.
+    pub effect_size: usize,
+    /// `sizeof(MthPeerStatus)` for the compiled Rust library.
+    pub peer_status_size: usize,
+    /// `sizeof(MthAbiLayout)` for the compiled Rust library.
+    pub abi_layout_size: usize,
+}
+
+impl MthAbiLayout {
+    const fn current() -> Self {
+        Self {
+            version_major: ABI_VERSION_MAJOR,
+            version_minor: ABI_VERSION_MINOR,
+            version_patch: ABI_VERSION_PATCH,
+            session_config_size: size_of::<MthSessionConfig>(),
+            buffer_size: size_of::<MthBuffer>(),
+            effect_size: size_of::<MthEffect>(),
+            peer_status_size: size_of::<MthPeerStatus>(),
+            abi_layout_size: size_of::<MthAbiLayout>(),
+        }
+    }
+}
+
 /// Returns the C ABI major version.
 #[unsafe(no_mangle)]
 pub const extern "C" fn mth_abi_version_major() -> u32 {
@@ -341,6 +453,41 @@ pub const extern "C" fn mth_abi_version_minor() -> u32 {
 #[unsafe(no_mangle)]
 pub const extern "C" fn mth_abi_version_patch() -> u32 {
     ABI_VERSION_PATCH
+}
+
+/// Copies ABI version and layout metadata into `out_layout`.
+///
+/// # Safety
+///
+/// `out_layout` must be writable for one [`MthAbiLayout`] value when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_abi_layout(out_layout: *mut MthAbiLayout) -> i32 {
+    if out_layout.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    // SAFETY: `out_layout` was checked for null and receives a plain C-compatible value.
+    unsafe {
+        *out_layout = MthAbiLayout::current();
+    }
+    code(BoundaryErrorCode::Success)
+}
+
+/// Checks that a host compiled against the same ABI version and struct sizes.
+#[unsafe(no_mangle)]
+pub const extern "C" fn mth_abi_check_layout(layout: MthAbiLayout) -> i32 {
+    let current = MthAbiLayout::current();
+    if layout.version_major != current.version_major
+        || layout.version_minor != current.version_minor
+        || layout.version_patch != current.version_patch
+        || layout.session_config_size != current.session_config_size
+        || layout.buffer_size != current.buffer_size
+        || layout.effect_size != current.effect_size
+        || layout.peer_status_size != current.peer_status_size
+        || layout.abi_layout_size != current.abi_layout_size
+    {
+        return MTH_ERROR_INVALID_ARGUMENT;
+    }
+    MTH_ERROR_SUCCESS
 }
 
 /// Frees a buffer returned by this library.
@@ -1005,6 +1152,17 @@ const fn action_kind_from_code(value: u32) -> Option<BoundaryActionKind> {
     }
 }
 
+#[cfg(test)]
+const fn boundary_action_kind_code(value: BoundaryActionKind) -> u32 {
+    match value {
+        BoundaryActionKind::Fold => 1,
+        BoundaryActionKind::Check => 2,
+        BoundaryActionKind::Call => 3,
+        BoundaryActionKind::RaiseTo => 4,
+        BoundaryActionKind::AllIn => 5,
+    }
+}
+
 const fn boundary_effect_kind_code(value: BoundaryEffectKind) -> u32 {
     match value {
         BoundaryEffectKind::BroadcastPublic => 1,
@@ -1041,6 +1199,164 @@ mod tests {
         assert_eq!(mth_abi_version_major(), ABI_VERSION_MAJOR);
         assert_eq!(mth_abi_version_minor(), ABI_VERSION_MINOR);
         assert_eq!(mth_abi_version_patch(), ABI_VERSION_PATCH);
+    }
+
+    #[test]
+    fn c_visible_constants_match_adapter_boundary() {
+        assert_eq!(MTH_ERROR_SUCCESS, code(BoundaryErrorCode::Success));
+        assert_eq!(MTH_ERROR_NULL_POINTER, code(BoundaryErrorCode::NullPointer));
+        assert_eq!(
+            MTH_ERROR_BUFFER_TOO_SMALL,
+            code(BoundaryErrorCode::BufferTooSmall)
+        );
+        assert_eq!(
+            MTH_ERROR_INVALID_ARGUMENT,
+            code(BoundaryErrorCode::InvalidArgument)
+        );
+        assert_eq!(MTH_ERROR_NO_EFFECT, code(BoundaryErrorCode::NoEffect));
+        assert_eq!(
+            MTH_ERROR_CONFIGURATION,
+            code(BoundaryErrorCode::Configuration)
+        );
+        assert_eq!(MTH_ERROR_CODEC, code(BoundaryErrorCode::Codec));
+        assert_eq!(
+            MTH_ERROR_AUTHENTICATION,
+            code(BoundaryErrorCode::Authentication)
+        );
+        assert_eq!(
+            MTH_ERROR_CRYPTOGRAPHY,
+            code(BoundaryErrorCode::Cryptography)
+        );
+        assert_eq!(MTH_ERROR_RULES, code(BoundaryErrorCode::Rules));
+        assert_eq!(MTH_ERROR_PROTOCOL, code(BoundaryErrorCode::Protocol));
+        assert_eq!(MTH_ERROR_RECOVERY, code(BoundaryErrorCode::Recovery));
+        assert_eq!(MTH_ERROR_INTERNAL, code(BoundaryErrorCode::Internal));
+
+        assert_eq!(
+            MTH_ACTION_FOLD,
+            boundary_action_kind_code(BoundaryActionKind::Fold)
+        );
+        assert_eq!(
+            MTH_ACTION_CHECK,
+            boundary_action_kind_code(BoundaryActionKind::Check)
+        );
+        assert_eq!(
+            MTH_ACTION_CALL,
+            boundary_action_kind_code(BoundaryActionKind::Call)
+        );
+        assert_eq!(
+            MTH_ACTION_RAISE_TO,
+            boundary_action_kind_code(BoundaryActionKind::RaiseTo)
+        );
+        assert_eq!(
+            MTH_ACTION_ALL_IN,
+            boundary_action_kind_code(BoundaryActionKind::AllIn)
+        );
+
+        assert_eq!(
+            MTH_EFFECT_BROADCAST_PUBLIC,
+            boundary_effect_kind_code(BoundaryEffectKind::BroadcastPublic)
+        );
+        assert_eq!(
+            MTH_EFFECT_SEND_PRIVATE,
+            boundary_effect_kind_code(BoundaryEffectKind::SendPrivate)
+        );
+        assert_eq!(
+            MTH_EFFECT_PERSIST,
+            boundary_effect_kind_code(BoundaryEffectKind::Persist)
+        );
+        assert_eq!(
+            MTH_EFFECT_REQUEST_ACTION,
+            boundary_effect_kind_code(BoundaryEffectKind::RequestAction)
+        );
+        assert_eq!(
+            MTH_EFFECT_SUBMIT_RECOVERY,
+            boundary_effect_kind_code(BoundaryEffectKind::SubmitRecovery)
+        );
+        assert_eq!(
+            MTH_EFFECT_PUBLISH_SHOWDOWN_BUNDLE,
+            boundary_effect_kind_code(BoundaryEffectKind::PublishShowdownBundle)
+        );
+        assert_eq!(
+            MTH_EFFECT_FINISHED,
+            boundary_effect_kind_code(BoundaryEffectKind::Finished)
+        );
+
+        assert_eq!(
+            MTH_PHASE_KEY_SETUP,
+            boundary_peer_phase_code(BoundaryPeerPhase::KeySetup)
+        );
+        assert_eq!(
+            MTH_PHASE_SHUFFLE,
+            boundary_peer_phase_code(BoundaryPeerPhase::Shuffle)
+        );
+        assert_eq!(
+            MTH_PHASE_PRIVATE_REVEAL,
+            boundary_peer_phase_code(BoundaryPeerPhase::PrivateReveal)
+        );
+        assert_eq!(
+            MTH_PHASE_HOLE_CARDS_READY,
+            boundary_peer_phase_code(BoundaryPeerPhase::HoleCardsReady)
+        );
+        assert_eq!(
+            MTH_PHASE_BETTING,
+            boundary_peer_phase_code(BoundaryPeerPhase::Betting)
+        );
+        assert_eq!(
+            MTH_PHASE_BOARD_REVEAL,
+            boundary_peer_phase_code(BoundaryPeerPhase::BoardReveal)
+        );
+        assert_eq!(
+            MTH_PHASE_SHOWDOWN,
+            boundary_peer_phase_code(BoundaryPeerPhase::Showdown)
+        );
+        assert_eq!(
+            MTH_PHASE_COMPLETE,
+            boundary_peer_phase_code(BoundaryPeerPhase::Complete)
+        );
+    }
+
+    #[test]
+    fn abi_layout_reports_and_checks_current_struct_sizes() {
+        let mut layout = MthAbiLayout {
+            version_major: 0,
+            version_minor: 0,
+            version_patch: 0,
+            session_config_size: 0,
+            buffer_size: 0,
+            effect_size: 0,
+            peer_status_size: 0,
+            abi_layout_size: 0,
+        };
+
+        assert_eq!(
+            // SAFETY: `layout` is a valid out pointer for one `MthAbiLayout` value.
+            unsafe { mth_abi_layout(&raw mut layout) },
+            code(BoundaryErrorCode::Success)
+        );
+        assert_eq!(layout.version_major, ABI_VERSION_MAJOR);
+        assert_eq!(layout.version_minor, ABI_VERSION_MINOR);
+        assert_eq!(layout.version_patch, ABI_VERSION_PATCH);
+        assert_eq!(layout.session_config_size, size_of::<MthSessionConfig>());
+        assert_eq!(layout.buffer_size, size_of::<MthBuffer>());
+        assert_eq!(layout.effect_size, size_of::<MthEffect>());
+        assert_eq!(layout.peer_status_size, size_of::<MthPeerStatus>());
+        assert_eq!(layout.abi_layout_size, size_of::<MthAbiLayout>());
+        assert_eq!(
+            mth_abi_check_layout(layout),
+            code(BoundaryErrorCode::Success)
+        );
+
+        layout.effect_size += 1;
+        assert_eq!(
+            mth_abi_check_layout(layout),
+            code(BoundaryErrorCode::InvalidArgument)
+        );
+        assert_eq!(
+            // SAFETY: This intentionally passes a null out pointer to verify the error code.
+            unsafe { mth_abi_layout(ptr::null_mut()) },
+            code(BoundaryErrorCode::NullPointer)
+        );
     }
 
     #[test]
