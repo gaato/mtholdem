@@ -14,15 +14,15 @@ English README: [README.md](README.md)
 
 ## Workspace 構成
 
-| crate | 責務 | 意図的に含めないもの |
-|---|---|---|
-| [`mental-card-core`](crates/mental-card-core) | 52 枚標準デッキ、identity、roster、しきい値 ElGamal、鍵保有証明、検証可能 shuffle、public/private reveal、1 deal の暗号状態機械 | betting、Hold'em street、wire payload、checkpoint、recovery、settlement |
-| [`mtholdem`](crates/mtholdem) | no-limit Texas Hold'em ルール、deal plan、署名付き wire、public transcript、hole-card receipt、showdown、checkpoint、recovery evidence | socket、timer、database、blockchain 実装 |
-| [`mtholdem-peer`](crates/mtholdem-peer) | peer-local orchestration、public/private artifact routing、host effects、key/shuffle/hole-card/betting/board/checkpoint/recovery/showdown progression | socket、timer、database、UI、placeholder protocol refs |
-| [`mtholdem-adapter`](crates/mtholdem-adapter) | `HostEffect` を CLI/C ABI/downstream WASM package が共有する byte/event/action/error/status 境界へ変換 | protocol validation、transport、allocator をまたぐ FFI unsafe |
-| [`mtholdem-ffi`](crates/mtholdem-ffi) | opaque handle、ABI version、error code、caller-visible buffer ownership を持つ C ABI | protocol fallback、Godot 固有 binding、Rust struct layout の公開 |
-| [`mtholdem-cli`](crates/mtholdem-cli) | scriptable CLI entrypoint と adapter boundary introspection | daemon、relay、interactive UI |
-| [`mtholdem-testkit`](crates/mtholdem-testkit) | deterministic roster、設定、鍵生成、全員 shuffle の統合テスト fixture | 本番用乱数、検証 bypass、fake proof、秘密値の覗き見 API |
+| crate | 用途 |
+|---|---|
+| [`mental-card-core`](crates/mental-card-core) | 標準カード暗号、identity、roster、threshold key、shuffle、reveal |
+| [`mtholdem`](crates/mtholdem) | no-limit Texas Hold'em rules、signed wire、transcript、checkpoint、recovery evidence、settlement-facing state |
+| [`mtholdem-peer`](crates/mtholdem-peer) | transport-neutral peer-session orchestration |
+| [`mtholdem-adapter`](crates/mtholdem-adapter) | CLI/C ABI/downstream WASM package が共有する byte-oriented boundary |
+| [`mtholdem-ffi`](crates/mtholdem-ffi) | opaque handle、ABI version、error code、caller-owned buffer を持つ C ABI |
+| [`mtholdem-cli`](crates/mtholdem-cli) | scriptable command-line entrypoint |
+| [`mtholdem-testkit`](crates/mtholdem-testkit) | downstream integration test 用 deterministic fixture |
 
 `mtholdem` は Hold'em 固有の rules/protocol crate です。汎用カード暗号、identity、roster、
 deck state machine だけを利用する crate は `mental-card-core` に直接依存してください。
@@ -30,23 +30,7 @@ Godot GDExtension はこの workspace には置かず、別 repository から `m
 呼ぶ前提です。
 WASM/npm package もこの workspace には置かず、別 repository から `mtholdem-adapter` を Rust
 dependency として使う前提です。
-
-## 再利用境界
-
-`mental-card-core` は、秘密カードを扱うゲーム向けの標準 52 枚デッキ暗号操作を提供します。
-
-- immutable roster と seat order
-- hand/deal ごとの `(n, n)` threshold key setup
-- rogue-key 対策の鍵保有証明
-- roster 順の verifiable sequential shuffle
-- exact deck / position / recipient に束縛された reveal share
-- public または指定 recipient 向けの card reconstruction
-
-Hold'em の wire event、checkpoint、recovery transcript、legal action、payout は `mtholdem` に
-残します。[`21 - Bringing Down the Complexity`][paper-21] が扱う public-state card game は別の
-protocol family です。
-
-詳細は [`docs/crate-boundaries.md`](docs/crate-boundaries.md) を参照してください。
+crate boundary の詳細は [`docs/crate-boundaries.md`](docs/crate-boundaries.md) にあります。
 
 ## 参照
 

@@ -15,15 +15,15 @@ Japanese README: [README.ja.md](README.ja.md)
 
 ## Workspace Layout
 
-| crate | Responsibility | Intentionally excluded |
-|---|---|---|
-| [`mental-card-core`](crates/mental-card-core) | 52-card standard deck, identities, roster, threshold ElGamal, key-ownership proofs, verifiable shuffles, public/private reveals, and one-deal cryptographic state | Betting, Hold'em streets, wire payloads, checkpoints, recovery, settlement |
-| [`mtholdem`](crates/mtholdem) | No-limit Texas Hold'em rules, deal plans, signed wire artifacts, public transcript, hole-card receipts, showdown, checkpoints, and recovery evidence | Sockets, timers, databases, blockchain implementation |
-| [`mtholdem-peer`](crates/mtholdem-peer) | Peer-local orchestration, public/private artifact routing, host effects, and key/shuffle/hole-card/betting/board/checkpoint/recovery/showdown progression | Sockets, timers, databases, UI, placeholder protocol refs |
-| [`mtholdem-adapter`](crates/mtholdem-adapter) | Converts `HostEffect` values into the byte/event/action/error/status boundary shared by CLI, C ABI, and downstream WASM packages | Protocol validation, transport, allocator-crossing FFI unsafe |
-| [`mtholdem-ffi`](crates/mtholdem-ffi) | C ABI with opaque handles, ABI version, error codes, and caller-visible buffer ownership | Protocol fallback, Godot-specific bindings, exposing Rust struct layout |
-| [`mtholdem-cli`](crates/mtholdem-cli) | Scriptable CLI entrypoint and adapter-boundary introspection | Daemon, relay, interactive UI |
-| [`mtholdem-testkit`](crates/mtholdem-testkit) | Deterministic integration-test fixtures for rosters, configuration, key generation, and complete shuffling | Production randomness, validation bypass, fake proofs, secret-inspection APIs |
+| crate | Purpose |
+|---|---|
+| [`mental-card-core`](crates/mental-card-core) | Standard-card cryptography, identities, rosters, threshold keys, shuffles, and reveals |
+| [`mtholdem`](crates/mtholdem) | No-limit Texas Hold'em rules, signed wire artifacts, transcripts, checkpoints, recovery evidence, and settlement-facing state |
+| [`mtholdem-peer`](crates/mtholdem-peer) | Transport-neutral peer-session orchestration |
+| [`mtholdem-adapter`](crates/mtholdem-adapter) | Byte-oriented boundary shared by CLI, C ABI, and downstream WASM packages |
+| [`mtholdem-ffi`](crates/mtholdem-ffi) | C ABI with opaque handles, ABI versioning, error codes, and caller-owned buffers |
+| [`mtholdem-cli`](crates/mtholdem-cli) | Scriptable command-line entrypoint |
+| [`mtholdem-testkit`](crates/mtholdem-testkit) | Deterministic fixtures for downstream integration tests |
 
 `mtholdem` is the Hold'em-specific rules/protocol crate. Crates that need only
 generic card cryptography, identities, rosters, or the deck state machine should
@@ -32,26 +32,8 @@ depend directly on `mental-card-core`.
 Godot GDExtension code is intentionally outside this workspace and should consume
 the C ABI from `mtholdem-ffi`. WASM/npm packaging is also outside this workspace
 and should consume `mtholdem-adapter` as a Rust dependency.
-
-## Reuse Boundary
-
-`mental-card-core` provides standard 52-card cryptographic operations for games
-that keep some cards private:
-
-- immutable roster and seat order;
-- per-hand/per-deal `(n, n)` threshold key setup;
-- key-ownership proofs against rogue-key attacks;
-- roster-ordered verifiable sequential shuffles;
-- reveal shares bound to an exact deck, position, and recipient;
-- public card reconstruction or reconstruction for one named recipient.
-
-Hold'em wire events, checkpoints, recovery transcripts, legal actions, and
-payouts remain in `mtholdem`. Public-state card games, such as the protocols
-described in [21 - Bringing Down the Complexity][paper-21], belong to a separate
-protocol family.
-
-See [docs/crate-boundaries.md](docs/crate-boundaries.md) for the detailed
-rationale.
+Crate-boundary rationale lives in
+[docs/crate-boundaries.md](docs/crate-boundaries.md).
 
 ## References
 
