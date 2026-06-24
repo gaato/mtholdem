@@ -1,0 +1,34 @@
+[package]
+name = "mtholdem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Sans-I/O protocol and deterministic rules for dealerless P2P no-limit Texas Hold'em"
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/mtholdem"
+keywords = ["poker", "mental-poker", "p2p", "cryptography", "texas-holdem"]
+categories = ["cryptography", "game-development", "network-programming"]
+include = [
+    "src/**",
+    "tests/**",
+    "examples/**",
+    "Cargo.toml",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "docs/**",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+]
+
+[dependencies]
+mental-card-core.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

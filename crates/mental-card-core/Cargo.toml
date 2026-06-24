@@ -1,0 +1,38 @@
+[package]
+name = "mental-card-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Game-neutral cryptographic building blocks for dealerless standard-card protocols"
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/mental-card-core"
+keywords = ["mental-poker", "p2p", "cryptography", "cards"]
+categories = ["cryptography", "game-development", "network-programming"]
+include = [
+    "src/**",
+    "Cargo.toml",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+]
+
+[dependencies]
+ark-ec.workspace = true
+ark-ff.workspace = true
+ark-secp256k1.workspace = true
+ark-serialize.workspace = true
+ark-std.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

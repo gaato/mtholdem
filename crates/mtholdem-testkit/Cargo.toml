@@ -1,0 +1,27 @@
+[package]
+name = "mtholdem-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Deterministic fixtures for testing applications built on mtholdem"
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/mtholdem-testkit"
+keywords = ["poker", "testing", "mental-poker"]
+categories = ["development-tools::testing", "game-development"]
+include = [
+    "src/**",
+    "Cargo.toml",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+]
+
+[dependencies]
+mtholdem.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

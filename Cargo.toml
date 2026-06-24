@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/mental-card-core",
+    "crates/mtholdem",
+    "crates/mtholdem-testkit",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["OpenAI"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+ark-ec = { version = "0.5.0", default-features = false }
+ark-ff = { version = "0.5.0", default-features = false }
+ark-secp256k1 = { version = "0.5.0", default-features = false }
+ark-serialize = { version = "0.5.0", default-features = false }
+ark-std = { version = "0.5.0", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "fast", "rand_core", "std", "zeroize"] }
+mental-card-core = { version = "0.3.0", path = "crates/mental-card-core" }
+mtholdem = { version = "0.3.0", path = "crates/mtholdem" }
+proptest = "1.6.0"
+rand = { version = "0.8.5", features = ["getrandom"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "deny"
+unused_lifetimes = "deny"
+unused_qualifications = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
