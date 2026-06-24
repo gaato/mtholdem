@@ -2,14 +2,20 @@
 
 ## Project Structure & Module Organization
 
-This workspace is split by trust boundary and reuse scope.
+Keep the root small. This repository is a three-crate Sans-I/O workspace.
 
-- `crates/mental-card-core` owns reusable standard-card cryptography, identity, roster, strong IDs, and per-deal key/shuffle/reveal orchestration.
-- `crates/mtholdem` owns Texas Hold'em rules, betting, wire artifacts, public transcripts, checkpoints, recovery evidence, and settlement-facing semantics.
-- `crates/mtholdem-testkit` owns deterministic fixtures for downstream tests. Keep it out of production dependency graphs.
-- `docs/decisions/` stores ADRs. Read them before changing architecture, public APIs, wire formats, recovery, settlement, or crate boundaries.
+- `README.md` summarizes the workspace and links to the architecture docs.
+- `docs/decisions/` stores ADRs. Read these before changing architecture,
+  public APIs, wire formats, recovery, settlement, crate boundaries, or
+  packaging.
+- `crates/mental-card-core`, `crates/mtholdem`, and `crates/mtholdem-testkit`
+  are the current crates.
 
-Dependencies must remain one-way: `mental-card-core <- mtholdem <- mtholdem-testkit`. Core must not learn Hold'em terms such as blinds, streets, hole cards, pots, muck, or showdown.
+Do not put transport, UI, storage, timer, or settlement implementation details
+inside protocol crates. Host applications may use CLI, Godot, WASM/WebRTC,
+libp2p, QUIC, relays, or in-process tests; the Rust state machines must remain
+usable by all of them. Crate-boundary rationale belongs in ADRs, especially
+ADR-001 through ADR-005.
 
 ## Build, Test, and Development Commands
 
@@ -22,13 +28,22 @@ Dependencies must remain one-way: `mental-card-core <- mtholdem <- mtholdem-test
 
 ## Coding Style & Naming Conventions
 
-Follow Rust API Guidelines and keep `unsafe` forbidden. Use strong domain types for seats, players, cards, sessions, hands, digests, and chip values. Prefer typed constructors over unchecked integers or raw byte vectors.
+Follow Rust API Guidelines and keep `unsafe` forbidden. Use strong domain types
+for seats, players, cards, sessions, hands, digests, and chip values. Prefer
+typed constructors over unchecked integers or raw byte vectors.
 
-Write Rustdoc and comments for future local readers and AI agents: mark invariants, caller obligations, proof-context bindings, and source-of-truth boundaries. Do not comment obvious code or leave commented-out implementations.
+Write comments and Rustdoc for local AI readability, not prose mirrors. Future
+agents may inspect one item and infer too much; mark invariants, caller
+obligations, proof-context bindings, protocol risks, and source-of-truth
+boundaries near dependent code. Public APIs need Rustdoc with failure semantics.
 
 ## Testing Guidelines
 
-Test observable consensus behavior: proof binding, transcript hash chains, wire decoding bounds, checkpoint semantics, recovery evidence, betting legality, chip conservation, and tamper rejection. Testkit helpers must use public production APIs and must not expose fake proofs, bypass constructors, or secret-inspection hooks.
+Test observable behavior: proof binding, transcript hash chains, wire decoding
+bounds, checkpoint semantics, recovery evidence, betting legality, chip
+conservation, tamper rejection, and panic boundaries. Testkit helpers must use
+public production APIs and must not expose fake proofs, bypass constructors, or
+secret-inspection hooks.
 
 ## Commit & PR Guidelines
 
@@ -38,4 +53,32 @@ PRs should include context, validation commands, known limitations, and links to
 
 ## Failure & Fallback Policy
 
-Do not add plausible fallback behavior. Failed proof verification, unknown wire versions, invalid actions, missing checkpoint evidence, unavailable production capabilities, and malformed transcripts must fail explicitly. Mock, deterministic, or experimental behavior is allowed only when the selected testkit or fixture names it clearly.
+Say when something cannot be done with the current code, data, dependencies, or
+runtime. Do not implement plausible-looking fallback behavior unless it is an
+explicitly designed and tested requirement. Prefer typed errors, diagnostics, or
+clear unsupported-operation messages over silent degradation.
+
+This rule exists because agents tend to preserve momentum by inventing fallback
+paths when the real cause is unclear. In this repository, that is a correctness
+bug: a fallback can hide cheating, desync participants, make transcripts
+unreplayable, or turn a failed proof into a false game state. Failed proof
+verification, unknown wire versions, invalid actions, missing checkpoint
+evidence, unavailable production capabilities, and malformed transcripts must
+fail explicitly unless an ADR and tests define a recovery path.
+
+Mock, deterministic, or experimental behavior is allowed only when the selected
+testkit or fixture names it explicitly. Production-oriented paths must not
+silently downgrade to deterministic, mock, experimental, or locally generated
+substitute data.
+
+## Pre-Stable Design Policy
+
+Before the first stable release, do not preserve compatibility with weak early
+Rust APIs, crate names, wire artifacts, transcript schemas, or module
+boundaries. Break and redesign them when the change clearly improves the final
+product. Do not add compatibility shims unless an ADR accepts the long-term
+cost.
+
+When a failure exposes a weak design, prefer finding and fixing the root cause
+over adding a local workaround. Refactoring is part of completing the product,
+not a cleanup phase after feature work.
