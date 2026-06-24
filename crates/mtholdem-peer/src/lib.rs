@@ -1542,6 +1542,63 @@ mod tests {
         CallOrCheck,
     }
 
+    #[derive(Default)]
+    struct HostObservations {
+        persisted_anchors: Vec<Vec<TranscriptAnchor>>,
+        finished: Vec<Vec<FinishedHand>>,
+        recoveries: Vec<(usize, RecoveryBundle)>,
+    }
+
+    struct E2eRun {
+        sessions: Vec<PeerSession>,
+        observations: HostObservations,
+    }
+
+    impl E2eRun {
+        fn assert_converged(&self) {
+            assert!(
+                self.sessions
+                    .iter()
+                    .all(|session| session.status().phase() == PeerPhase::Complete)
+            );
+
+            let anchors: Vec<_> = self
+                .sessions
+                .iter()
+                .map(PeerSession::transcript_anchor)
+                .collect();
+            assert!(anchors.windows(2).all(|pair| pair[0] == pair[1]));
+
+            let message_counts: Vec<_> = self
+                .sessions
+                .iter()
+                .map(|session| session.public_messages().len())
+                .collect();
+            assert!(message_counts.windows(2).all(|pair| pair[0] == pair[1]));
+
+            let final_stacks: Vec<_> = self.sessions.iter().map(final_stacks).collect();
+            assert!(final_stacks.windows(2).all(|pair| pair[0] == pair[1]));
+            let total = final_stacks[0]
+                .iter()
+                .copied()
+                .try_fold(Chips::ZERO, Chips::checked_add)
+                .expect("final stacks conserve chips");
+            assert_eq!(total, Chips::from_units(300));
+
+            assert!(self.observations.finished.iter().all(|effects| {
+                effects
+                    .last()
+                    .is_some_and(|finished| finished.transcript_anchor() == anchors[0])
+            }));
+            assert!(
+                self.observations
+                    .persisted_anchors
+                    .iter()
+                    .all(|anchors| !anchors.is_empty())
+            );
+        }
+    }
+
     fn config(seeds: &[[u8; 32]], rng: &mut StdRng) -> SessionConfig {
         let identities: Vec<_> = seeds
             .iter()
@@ -1590,6 +1647,7 @@ mod tests {
     fn handle_effects(
         sessions: &mut [PeerSession],
         queue: &mut VecDeque<QueuedEffect>,
+        observations: &mut HostObservations,
         rng: &mut StdRng,
         sender_index: usize,
         action_policy: ActionPolicy,
@@ -1627,17 +1685,29 @@ mod tests {
                         sessions[sender_index].progress(rng).unwrap();
                         follow_up.extend(sessions[sender_index].drain_effects());
                     }
-                    HostEffect::Persist { .. }
-                    | HostEffect::SubmitRecovery(_)
-                    | HostEffect::Finished(_) => {}
+                    HostEffect::Persist {
+                        transcript_anchor,
+                        checkpoint: _,
+                    } => observations.persisted_anchors[sender_index].push(transcript_anchor),
+                    HostEffect::SubmitRecovery(bundle) => {
+                        observations.recoveries.push((sender_index, bundle));
+                    }
+                    HostEffect::Finished(finished) => {
+                        observations.finished[sender_index].push(finished);
+                    }
                 }
             }
             effects = follow_up;
         }
     }
 
-    fn drive(action_policy: ActionPolicy) -> Vec<PeerSession> {
+    fn drive(action_policy: ActionPolicy) -> E2eRun {
         let mut sessions = sessions();
+        let mut observations = HostObservations {
+            persisted_anchors: vec![Vec::new(); sessions.len()],
+            finished: vec![Vec::new(); sessions.len()],
+            recoveries: Vec::new(),
+        };
         let mut rng = StdRng::from_seed([0xA5; 32]);
         let mut queue = VecDeque::new();
 
@@ -1647,6 +1717,7 @@ mod tests {
             handle_effects(
                 &mut sessions,
                 &mut queue,
+                &mut observations,
                 &mut rng,
                 index,
                 action_policy,
@@ -1671,6 +1742,7 @@ mod tests {
                         handle_effects(
                             &mut sessions,
                             &mut queue,
+                            &mut observations,
                             &mut rng,
                             index,
                             action_policy,
@@ -1688,6 +1760,7 @@ mod tests {
                     handle_effects(
                         &mut sessions,
                         &mut queue,
+                        &mut observations,
                         &mut rng,
                         recipient_index,
                         action_policy,
@@ -1707,6 +1780,7 @@ mod tests {
                         handle_effects(
                             &mut sessions,
                             &mut queue,
+                            &mut observations,
                             &mut rng,
                             index,
                             action_policy,
@@ -1716,42 +1790,53 @@ mod tests {
                 }
             }
         }
-        sessions
+        E2eRun {
+            sessions,
+            observations,
+        }
     }
 
-    fn drive_to_uncontested_finish() -> Vec<PeerSession> {
+    fn drive_to_uncontested_finish() -> E2eRun {
         drive(ActionPolicy::Fold)
+    }
+
+    fn final_stacks(session: &PeerSession) -> Vec<Chips> {
+        session
+            .holdem
+            .as_ref()
+            .and_then(HoldemHand::result)
+            .expect("hand result")
+            .final_stacks()
+            .to_vec()
     }
 
     #[test]
     fn peers_exchange_messages_through_uncontested_finish() {
-        let sessions = drive_to_uncontested_finish();
-        assert!(sessions.iter().all(PeerSession::deck_ready));
+        let run = drive_to_uncontested_finish();
+        run.assert_converged();
+        assert!(run.sessions.iter().all(PeerSession::deck_ready));
         assert!(
-            sessions
-                .iter()
-                .all(|session| session.status().phase() == PeerPhase::Complete)
-        );
-        assert!(
-            sessions
+            run.sessions
                 .iter()
                 .all(|session| session.local_hole_cards().is_some())
         );
         assert!(
-            sessions
+            run.sessions
                 .iter()
                 .all(|session| session.local_receipt_digest().is_some())
         );
-        let anchors: Vec<_> = sessions
-            .iter()
-            .map(PeerSession::transcript_anchor)
-            .collect();
-        assert!(anchors.windows(2).all(|pair| pair[0] == pair[1]));
+        assert!(
+            run.sessions
+                .iter()
+                .all(|session| session.board().is_empty())
+        );
     }
 
     #[test]
     fn certified_checkpoint_can_be_announced_and_used_for_recovery() {
-        let mut sessions = drive_to_uncontested_finish();
+        let mut run = drive_to_uncontested_finish();
+        run.assert_converged();
+        let sessions = &mut run.sessions;
         let votes = sessions
             .iter()
             .map(PeerSession::sign_checkpoint_vote)
@@ -1800,23 +1885,14 @@ mod tests {
 
     #[test]
     fn peers_reveal_board_and_finish_contested_showdown() {
-        let sessions = drive(ActionPolicy::CallOrCheck);
+        let run = drive(ActionPolicy::CallOrCheck);
+        run.assert_converged();
         assert!(
-            sessions
-                .iter()
-                .all(|session| session.status().phase() == PeerPhase::Complete)
-        );
-        let anchors: Vec<_> = sessions
-            .iter()
-            .map(PeerSession::transcript_anchor)
-            .collect();
-        assert!(anchors.windows(2).all(|pair| pair[0] == pair[1]));
-        assert!(
-            sessions
+            run.sessions
                 .iter()
                 .all(|session| session.open_board_cards().len() == 5)
         );
-        assert!(sessions.iter().all(|session| {
+        assert!(run.sessions.iter().all(|session| {
             (0..session.config().roster().len()).all(|index| {
                 session
                     .showdown_hand(Seat::new(index).expect("seat"))
