@@ -2,7 +2,7 @@
 #![allow(elided_lifetimes_in_paths, missing_docs, unused_qualifications)]
 
 // Copyright (c) 2025 the ziffle contributors.
-// Modifications copyright (c) 2026 OpenAI.
+// Modifications copyright (c) 2026 Gakuto Furuya.
 //
 // This module is derived from ziffle 0.1.0 under MIT OR Apache-2.0.
 // See THIRD_PARTY_NOTICES.md.  It is intentionally private: the surrounding
