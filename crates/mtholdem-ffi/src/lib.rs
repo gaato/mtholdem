@@ -15,7 +15,9 @@ use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::{Chips, HandNumber, Seat, SessionId};
 use mtholdem_adapter::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, BoundaryAction, BoundaryActionKind,
-    BoundaryEffect, BoundaryEffectKind, BoundaryErrorCode, BoundaryPeerPhase, encode_effects,
+    BoundaryEffect, BoundaryEffectKind, BoundaryErrorCode, BoundaryPeerPhase,
+    decode_certified_checkpoint, decode_showdown_bundle, encode_checkpoint_state, encode_effects,
+    encode_recovery_bundle,
 };
 use mtholdem_peer::PeerSession;
 use rand::rngs::OsRng;
@@ -327,6 +329,45 @@ pub extern "C" fn mth9_peer_session_apply_private(
     })
 }
 
+/// Applies one canonical certified-checkpoint byte string.
+#[unsafe(no_mangle)]
+pub extern "C" fn mth9_peer_session_apply_checkpoint(
+    handle: *mut Mth9PeerSession,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+) -> i32 {
+    with_handle_and_bytes(handle, bytes_ptr, bytes_len, |handle, bytes| {
+        let checkpoint = decode_certified_checkpoint(bytes)?;
+        handle.session.apply_certified_checkpoint(checkpoint)
+    })
+}
+
+/// Announces one canonical certified-checkpoint byte string in the public transcript.
+#[unsafe(no_mangle)]
+pub extern "C" fn mth9_peer_session_announce_checkpoint(
+    handle: *mut Mth9PeerSession,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+) -> i32 {
+    with_handle_and_bytes(handle, bytes_ptr, bytes_len, |handle, bytes| {
+        let checkpoint = decode_certified_checkpoint(bytes)?;
+        handle.session.announce_checkpoint(checkpoint)
+    })
+}
+
+/// Applies one canonical showdown-bundle byte string.
+#[unsafe(no_mangle)]
+pub extern "C" fn mth9_peer_session_apply_showdown(
+    handle: *mut Mth9PeerSession,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+) -> i32 {
+    with_handle_and_bytes(handle, bytes_ptr, bytes_len, |handle, bytes| {
+        let bundle = decode_showdown_bundle(bytes)?;
+        handle.session.apply_showdown_bundle(bundle)
+    })
+}
+
 /// Applies one local betting action.
 #[unsafe(no_mangle)]
 pub extern "C" fn mth9_peer_session_submit_action(
@@ -342,6 +383,34 @@ pub extern "C" fn mth9_peer_session_submit_action(
             .session
             .submit_action(BoundaryAction::new(kind, raise_to_units).to_bet_action())
     })
+}
+
+/// Captures the current peer-visible checkpoint state as canonical bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn mth9_peer_session_checkpoint_state(
+    handle: *mut Mth9PeerSession,
+    out_buffer: *mut Mth9Buffer,
+) -> i32 {
+    with_output_buffer(handle, out_buffer, |handle| {
+        encode_checkpoint_state(&handle.session.checkpoint_state()?)
+    })
+}
+
+/// Builds the current recovery bundle as canonical bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn mth9_peer_session_recovery_bundle(
+    handle: *mut Mth9PeerSession,
+    out_buffer: *mut Mth9Buffer,
+) -> i32 {
+    with_output_buffer(handle, out_buffer, |handle| {
+        encode_recovery_bundle(&handle.session.recovery_bundle()?)
+    })
+}
+
+/// Requests recovery and queues the matching host effects.
+#[unsafe(no_mangle)]
+pub extern "C" fn mth9_peer_session_request_recovery(handle: *mut Mth9PeerSession) -> i32 {
+    with_handle(handle, |handle| handle.session.request_recovery())
 }
 
 /// Copies the current peer status into `out_status`.
@@ -536,6 +605,31 @@ fn with_handle_and_bytes(
         Ok(()) => {
             handle.last_error.clear();
             clear_global_error();
+            code(BoundaryErrorCode::Success)
+        }
+        Err(error) => store_error(handle, &error),
+    }
+}
+
+fn with_output_buffer(
+    handle: *mut Mth9PeerSession,
+    out_buffer: *mut Mth9Buffer,
+    operation: impl FnOnce(&mut Mth9PeerSession) -> Result<Vec<u8>, Error>,
+) -> i32 {
+    if out_buffer.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    let Some(handle) = checked_handle(handle) else {
+        return code(BoundaryErrorCode::NullPointer);
+    };
+    match operation(handle) {
+        Ok(bytes) => {
+            clear_global_error();
+            handle.last_error.clear();
+            // SAFETY: `out_buffer` was checked for null and receives an owned buffer value.
+            unsafe {
+                *out_buffer = Mth9Buffer::from_vec(bytes);
+            }
             code(BoundaryErrorCode::Success)
         }
         Err(error) => store_error(handle, &error),
