@@ -28,10 +28,6 @@ English README: [README.md](README.md)
 
 `mtholdem` は Hold'em 固有の rules/protocol crate です。汎用カード暗号、identity、roster、
 deck state machine だけを利用する crate は `mental-card-core` に直接依存してください。
-Godot GDExtension はこの workspace には置かず、別 repository から `mtholdem-ffi` の C ABI を
-呼ぶ前提です。
-WASM/npm package もこの workspace には置かず、別 repository から `mtholdem-adapter` を Rust
-dependency として使う前提です。
 crate boundary の詳細は [`docs/crate-boundaries.md`](docs/crate-boundaries.md) にあります。
 
 ## 参照

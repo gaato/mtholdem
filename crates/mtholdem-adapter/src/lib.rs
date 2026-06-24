@@ -373,23 +373,30 @@ pub enum BoundaryEffectKind {
 }
 
 /// Final hand summary encoded for target wrappers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundaryFinishedHand {
     hand: u64,
     transcript_anchor: BoundaryTranscriptAnchor,
+    final_stacks_units: Vec<u64>,
 }
 
 impl BoundaryFinishedHand {
     /// Returns the completed hand number.
     #[must_use]
-    pub const fn hand(self) -> u64 {
+    pub const fn hand(&self) -> u64 {
         self.hand
     }
 
     /// Returns the final transcript anchor.
     #[must_use]
-    pub const fn transcript_anchor(self) -> BoundaryTranscriptAnchor {
+    pub const fn transcript_anchor(&self) -> BoundaryTranscriptAnchor {
         self.transcript_anchor
+    }
+
+    /// Returns post-hand stacks in table seat order.
+    #[must_use]
+    pub fn final_stacks_units(&self) -> &[u64] {
+        &self.final_stacks_units
     }
 }
 
@@ -398,6 +405,11 @@ impl From<FinishedHand> for BoundaryFinishedHand {
         Self {
             hand: value.hand().to_u64(),
             transcript_anchor: value.transcript_anchor().into(),
+            final_stacks_units: value
+                .final_stacks()
+                .iter()
+                .map(|chips| chips.units())
+                .collect(),
         }
     }
 }
@@ -458,8 +470,8 @@ impl BoundaryEffect {
 
     /// Returns the final hand summary for [`BoundaryEffectKind::Finished`].
     #[must_use]
-    pub const fn finished(&self) -> Option<BoundaryFinishedHand> {
-        self.finished
+    pub const fn finished(&self) -> Option<&BoundaryFinishedHand> {
+        self.finished.as_ref()
     }
 
     fn public(message: &SignedPublicMessage) -> Result<Self> {

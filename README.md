@@ -31,9 +31,6 @@ API documentation for `main`: <https://gaato.github.io/mtholdem/>
 generic card cryptography, identities, rosters, or the deck state machine should
 depend directly on `mental-card-core`.
 
-Godot GDExtension code is intentionally outside this workspace and should consume
-the C ABI from `mtholdem-ffi`. WASM/npm packaging is also outside this workspace
-and should consume `mtholdem-adapter` as a Rust dependency.
 Crate-boundary rationale lives in
 [docs/crate-boundaries.md](docs/crate-boundaries.md).
 

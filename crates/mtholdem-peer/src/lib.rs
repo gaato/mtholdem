@@ -82,32 +82,44 @@ pub enum HostEffect {
 }
 
 /// Final peer-visible hand summary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinishedHand {
     hand: HandNumber,
     transcript_anchor: TranscriptAnchor,
+    final_stacks: Vec<Chips>,
 }
 
 impl FinishedHand {
     /// Creates a final hand summary.
     #[must_use]
-    pub const fn new(hand: HandNumber, transcript_anchor: TranscriptAnchor) -> Self {
+    pub fn new(
+        hand: HandNumber,
+        transcript_anchor: TranscriptAnchor,
+        final_stacks: impl Into<Vec<Chips>>,
+    ) -> Self {
         Self {
             hand,
             transcript_anchor,
+            final_stacks: final_stacks.into(),
         }
     }
 
     /// Returns the completed hand number.
     #[must_use]
-    pub const fn hand(self) -> HandNumber {
+    pub const fn hand(&self) -> HandNumber {
         self.hand
     }
 
     /// Returns the final public transcript anchor.
     #[must_use]
-    pub const fn transcript_anchor(self) -> TranscriptAnchor {
+    pub const fn transcript_anchor(&self) -> TranscriptAnchor {
         self.transcript_anchor
+    }
+
+    /// Returns post-hand stacks in table seat order.
+    #[must_use]
+    pub fn final_stacks(&self) -> &[Chips] {
+        &self.final_stacks
     }
 }
 
@@ -964,10 +976,17 @@ impl PeerSession {
         if self.finished_emitted {
             return false;
         }
+        let final_stacks = self
+            .holdem
+            .as_ref()
+            .and_then(HoldemHand::result)
+            .map(|result| result.final_stacks().to_vec())
+            .unwrap_or_default();
         self.effects
             .push_back(HostEffect::Finished(FinishedHand::new(
                 self.hand,
                 self.transcript.anchor(),
+                final_stacks,
             )));
         self.finished_emitted = true;
         true
