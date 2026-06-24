@@ -17,6 +17,8 @@ All notable changes to this project are documented here.
   receipts, signed betting actions, public community-card reveals, checkpoint
   certification/announcement, recovery-bundle submission, showdown bundle publication,
   deterministic payout agreement, and final-hand effects through `mtholdem`.
+- Added `mtholdem-adapter`, `mtholdem-cli`, and `mtholdem-ffi` for the shared byte-oriented
+  boundary, scriptable smoke entrypoint, and opaque-handle C ABI.
 - Added `mtholdem-testkit` as a separate deterministic integration-fixture crate. It composes only
   public APIs and contains no proof or validation bypass.
 
@@ -52,6 +54,8 @@ All notable changes to this project are documented here.
   `crates/mtholdem`.
 - Direct imports of implementation files from the former root `src` tree must use either the
   Hold'em crate API or the new `mental-card-core` crate.
+- WASM/npm packaging is not an in-workspace crate. Downstream WASM packages should consume
+  `mtholdem-adapter` as a Rust dependency and own their own binding generator and browser tests.
 - All workspace crates are version 0.1.0 and require Rust 1.85.
 
 ## Internal hardening milestone - 2026-06-23

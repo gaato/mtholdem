@@ -1,8 +1,8 @@
 # Validation record
 
-This record applies to the current `mtholdem` 0.1.0 eight-crate workspace:
+This record applies to the current `mtholdem` 0.1.0 seven-crate workspace:
 `mental-card-core`, `mtholdem`, `mtholdem-peer`, `mtholdem-adapter`,
-`mtholdem-cli`, `mtholdem-ffi`, `mtholdem-wasm`, and `mtholdem-testkit`.
+`mtholdem-cli`, `mtholdem-ffi`, and `mtholdem-testkit`.
 It documents checks actually performed in the reconstruction environment.
 Passing them demonstrates build and test hygiene; it is not an independent
 cryptographic audit, a formal implementation proof, or a production-readiness
@@ -34,19 +34,19 @@ cargo +1.85.0 metadata --locked --format-version 1 --no-deps
 
 ## Current observed results
 
-- 53 unit/property/adversarial tests passed across the workspace: 8 core, 32
-  Hold'em, 3 adapter, 3 FFI, 4 peer, 2 testkit, and 1 WASM.
+- 52 unit/property/adversarial tests passed across the workspace: 8 core, 32
+  Hold'em, 3 adapter, 3 FFI, 4 peer, and 2 testkit.
 - Clippy completed for the entire workspace, all targets, and all features with
   warnings denied.
-- Rustdoc completed for the eight-crate workspace without dependencies.
+- Rustdoc completed for the seven-crate workspace without dependencies.
 - The complete three-player simulation opened a five-card board and conserved
   the 300-chip supply.
 - The CLI smoke-peer path exercised the adapter/peer boundary and emitted
   `broadcast-public` and `persist` host effects.
 - `cargo metadata` reported the intended dependency direction:
   `mental-card-core <- mtholdem <- mtholdem-peer <- mtholdem-adapter <-
-  target wrappers`, with `mtholdem-testkit` outside production dependency
-  graphs.
+  in-workspace target wrappers`, with `mtholdem-testkit` outside production
+  dependency graphs.
 
 The test suite covers aggregate-key/deck binding, reveal-share
 deck/position/recipient binding, private-receipt and showdown substitution
@@ -79,7 +79,7 @@ clippy 0.1.85
 ```
 
 This earlier validation was performed with Rust 1.85 before the peer, adapter,
-CLI, FFI, and WASM crates were added.
+CLI, and FFI crates were added.
 
 ## Historical commands completed successfully
 
@@ -154,7 +154,7 @@ automation must publish and verify in dependency order, starting with:
 2. `mtholdem` 0.1.0;
 3. `mtholdem-peer` 0.1.0;
 4. `mtholdem-adapter` 0.1.0;
-5. target wrappers and `mtholdem-testkit` 0.1.0 as their dependency
+5. in-workspace target wrappers and `mtholdem-testkit` 0.1.0 as their dependency
    constraints permit.
 
 Before publication, package-content manifests should be checked with

@@ -30,7 +30,7 @@ use rand::{CryptoRng, RngCore};
 
 /// An action the host application must perform outside the protocol crate.
 ///
-/// Effects are deliberately typed around `mtholdem` artifacts.  FFI, WASM, and JSON
+/// Effects are deliberately typed around `mtholdem` artifacts. FFI, WASM, and JSON
 /// adapters may encode them at their boundary, but the Rust peer layer keeps the
 /// canonical protocol values intact.
 #[derive(Clone, Debug)]

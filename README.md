@@ -2,7 +2,7 @@
 
 このリポジトリは、信頼できるディーラーを置かない P2P Texas Hold'em を実装するための
 **Sans-I/O Rust ワークスペース**です。初回公開版の API は、再利用可能な暗号カード層、
-Texas Hold'em 固有層、transport-neutral peer 層、target wrapper 層、テスト支援層を
+Texas Hold'em 固有層、transport-neutral peer 層、adapter/target wrapper 層、テスト支援層を
 別 crate として公開します。
 
 > **重要:** これは研究・試作用の未監査ソフトウェアです。独立した暗号監査、形式検証、
@@ -17,9 +17,8 @@ Texas Hold'em 固有層、transport-neutral peer 層、target wrapper 層、テ�
 | [`mental-card-core`](crates/mental-card-core) | 52 枚標準デッキ、identity、roster、しきい値 ElGamal、鍵保有証明、検証可能 shuffle、public/private reveal、1 deal の暗号状態機械 | betting、Hold'em street、wire payload、checkpoint、recovery、settlement |
 | [`mtholdem`](crates/mtholdem) | no-limit Texas Hold'em ルール、deal plan、署名付き wire、public transcript、hole-card receipt、showdown、checkpoint、recovery evidence | socket、timer、database、blockchain 実装 |
 | [`mtholdem-peer`](crates/mtholdem-peer) | peer-local orchestration、public/private artifact routing、host effects、key/shuffle/hole-card/betting/board/checkpoint/recovery/showdown progression | socket、timer、database、UI、placeholder protocol refs |
-| [`mtholdem-adapter`](crates/mtholdem-adapter) | `HostEffect` を CLI/WASM/C ABI が共有する byte/event/action/error/status 境界へ変換 | protocol validation、transport、allocator をまたぐ FFI unsafe |
+| [`mtholdem-adapter`](crates/mtholdem-adapter) | `HostEffect` を CLI/C ABI/downstream WASM package が共有する byte/event/action/error/status 境界へ変換 | protocol validation、transport、allocator をまたぐ FFI unsafe |
 | [`mtholdem-ffi`](crates/mtholdem-ffi) | opaque handle、ABI version、error code、caller-visible buffer ownership を持つ C ABI | protocol fallback、Godot 固有 binding、Rust struct layout の公開 |
-| [`mtholdem-wasm`](crates/mtholdem-wasm) | WASM package が使う target-neutral wrapper helper | JavaScript framework、`wasm-bindgen` 固定、browser transport |
 | [`mtholdem-cli`](crates/mtholdem-cli) | scriptable CLI entrypoint と adapter boundary introspection | daemon、relay、interactive UI |
 | [`mtholdem-testkit`](crates/mtholdem-testkit) | deterministic roster、設定、鍵生成、全員 shuffle の統合テスト fixture | 本番用乱数、検証 bypass、fake proof、秘密値の覗き見 API |
 
@@ -27,6 +26,8 @@ Texas Hold'em 固有層、transport-neutral peer 層、target wrapper 層、テ�
 deck state machine だけを利用する crate は `mental-card-core` に直接依存してください。
 Godot GDExtension はこの workspace には置かず、別 repository から `mtholdem-ffi` の C ABI を
 呼ぶ前提です。
+WASM/npm package もこの workspace には置かず、別 repository から `mtholdem-adapter` を Rust
+dependency として使う前提です。
 
 ## どこまで汎用化したか
 

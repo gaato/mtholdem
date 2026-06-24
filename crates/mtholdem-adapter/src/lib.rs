@@ -1,6 +1,6 @@
 //! Target-neutral byte adapters for `mtholdem-peer`.
 //!
-//! This crate is the shared boundary for CLI, WASM, C ABI, and engine wrappers.  It
+//! This crate is the shared boundary for CLI, C ABI, engine, and WASM package wrappers. It
 //! converts typed [`mtholdem_peer::HostEffect`] values into stable byte-oriented
 //! events while leaving protocol validation, transcript ordering, and game rules in
 //! `mtholdem` and `mtholdem-peer`.
@@ -25,7 +25,7 @@ pub const ABI_VERSION_MINOR: u32 = 1;
 /// Patch version of the stable host boundary.
 pub const ABI_VERSION_PATCH: u32 = 0;
 
-/// Error codes shared by CLI, WASM, and C ABI wrappers.
+/// Error codes shared by CLI, C ABI, engine, and WASM package wrappers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum BoundaryErrorCode {
@@ -397,7 +397,7 @@ impl From<FinishedHand> for BoundaryFinishedHand {
     }
 }
 
-/// Byte-oriented host effect shared by CLI, WASM, C ABI, and engine wrappers.
+/// Byte-oriented host effect shared by CLI, C ABI, engine, and WASM package wrappers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundaryEffect {
     kind: BoundaryEffectKind,

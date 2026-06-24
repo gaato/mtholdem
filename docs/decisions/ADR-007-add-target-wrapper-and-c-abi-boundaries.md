@@ -1,7 +1,7 @@
 # ADR-007: Add Target Wrapper and C ABI Boundaries
 
 ## Status
-Accepted
+Accepted; amended by ADR-008
 
 ## Date
 2026-06-24
@@ -66,3 +66,5 @@ vectors, but it must not own GDExtension build files or Godot-specific bindings.
 - C ABI implementation requires an explicit unsafe exception isolated to its crate.
 - Godot support is defined as a downstream consumer of the C ABI, not as an in-workspace
   GDExtension target.
+- ADR-008 later removes the in-workspace WASM helper while keeping `mtholdem-adapter` as the
+  shared Rust boundary for downstream WASM/npm packages.

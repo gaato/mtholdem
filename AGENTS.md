@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Keep the root small. This repository is an eight-crate Sans-I/O workspace.
+Keep the root small. This repository is a seven-crate Sans-I/O workspace.
 
 - `README.md` summarizes the workspace and links to the architecture docs.
 - `docs/decisions/` stores ADRs. Read these before changing architecture,
@@ -14,10 +14,10 @@ Keep the root small. This repository is an eight-crate Sans-I/O workspace.
   transcripts, checkpoints, recovery evidence, and settlement-facing semantics.
 - `crates/mtholdem-peer` owns the transport-neutral peer-session driver and
   emits host effects instead of doing I/O.
-- `crates/mtholdem-adapter` owns the byte-oriented boundary shared by CLI,
-  WASM, and C ABI wrappers.
-- `crates/mtholdem-cli`, `crates/mtholdem-ffi`, and `crates/mtholdem-wasm`
-  expose target-specific wrappers over the adapter boundary.
+- `crates/mtholdem-adapter` owns the byte-oriented boundary shared by CLI, C ABI,
+  and downstream engine or WASM package consumers.
+- `crates/mtholdem-cli` and `crates/mtholdem-ffi` expose in-workspace
+  target-specific wrappers over the adapter boundary.
 - `crates/mtholdem-testkit` owns deterministic fixtures for downstream tests.
   Keep it out of production dependency graphs.
 
@@ -25,11 +25,12 @@ Do not put transport, UI, storage, timer, or settlement implementation details
 inside protocol crates. Host applications may use CLI, Godot, WASM/WebRTC,
 libp2p, QUIC, relays, or in-process tests; the Rust state machines must remain
 usable by all of them. Crate-boundary rationale belongs in ADRs, especially
-ADR-001 through ADR-007.
+ADR-001 through ADR-008.
 
 Dependencies must remain one-way:
 `mental-card-core <- mtholdem <- mtholdem-peer <- mtholdem-adapter <-
-target wrappers`, with `mtholdem-testkit` used only for deterministic tests.
+in-workspace target wrappers`, with `mtholdem-testkit` used only for
+deterministic tests.
 Core must not learn Hold'em terms such as blinds, streets, hole cards, pots,
 muck, or showdown.
 

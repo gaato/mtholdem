@@ -15,8 +15,7 @@ mental-card-core
           │     └── mtholdem-adapter
           │           ↑
           │           ├── mtholdem-cli
-          │           ├── mtholdem-ffi
-          │           └── mtholdem-wasm
+          │           └── mtholdem-ffi
           └── mtholdem-testkit
 ```
 
@@ -113,18 +112,18 @@ P2P multiplayer には local identity、key share、message ordering、replay re
 必要です。一方で socket、timer、database、UI は deployment ごとに異なります。`mtholdem-peer` は
 `SignedPublicMessage`、`SignedPrivateReveal`、`HandCryptography`、checkpoint/recovery artifact を
 直接 orchestration し、transport には typed `HostEffect` を返すだけにします。これにより CLI、FFI、
-WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
+downstream WASM/npm package、Godot wrapper は同じ Rust-owned peer state を包めます。
 
 ## adapter と target wrapper を分けた理由
 
-CLI、WASM、C ABI、Godot binding は同じ peer-session state を使いますが、allocator、buffer ownership、
-error reporting、language binding の制約は target ごとに違います。`mtholdem-adapter` は
+CLI、C ABI、downstream WASM package、Godot binding は同じ peer-session state を使いますが、allocator、
+buffer ownership、error reporting、language binding の制約は target ごとに違います。`mtholdem-adapter` は
 `mtholdem-peer` の typed effects と actions を byte-oriented な境界値へ変換する共通層です。
 
-`mtholdem-cli`、`mtholdem-ffi`、`mtholdem-wasm` は adapter の外側だけを担当します。C ABI は opaque
-handle、ABI version、caller-visible buffer ownership を公開し、Rust struct layout は公開しません。
-WASM helper は `wasm-bindgen` 固定ではなく Rust wrapper helper に留めます。Godot GDExtension はこの
-workspace には置かず、別 repository から C ABI consumer として実装します。
+`mtholdem-cli` と `mtholdem-ffi` は adapter の外側だけを担当します。C ABI は opaque handle、ABI
+version、caller-visible buffer ownership を公開し、Rust struct layout は公開しません。WASM/npm
+package はこの workspace には置かず、別 repository から Rust adapter consumer として実装します。
+Godot GDExtension もこの workspace には置かず、別 repository から C ABI consumer として実装します。
 
 ## naming
 
@@ -133,7 +132,6 @@ workspace には置かず、別 repository から C ABI consumer として実装
 - `mtholdem-adapter`: target wrapper が共有する byte/event/action/error/status 境界を表すため維持。
 - `mtholdem-cli`: scriptable CLI wrapper であることを表すため維持。
 - `mtholdem-ffi`: C ABI boundary と opaque handle ownership を表すため維持。
-- `mtholdem-wasm`: WASM package 用の helper boundary を表すため維持。
 - `mental-card-core`: poker 以外にも使えるが、standard-card secret-state protocol であることを表現。
 - `mtholdem-testkit`: Hold'em config と wrapper を含むため product prefix を維持。
 
@@ -144,7 +142,7 @@ workspace には置かず、別 repository から C ABI consumer として実装
 ## release and versioning
 
 公開対象 crate は同じ workspace version を使います。release order は dependency graph に従い、
-`mental-card-core`、`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、target wrappers、
+`mental-card-core`、`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、in-workspace target wrappers、
 `mtholdem-testkit` の順に検証します。downstream package の Cargo verification は、依存する同
 version の crate が registry に公開された後に実行します。
 

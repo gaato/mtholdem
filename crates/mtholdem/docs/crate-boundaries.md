@@ -1,6 +1,6 @@
 # Crate boundary decisions for the initial workspace API
 
-この文書は「なぜこの 3 crate なのか」「次のゲームを追加するとき何を共通化すべきか」を記録します。
+この文書は「なぜこの crate graph なのか」「次のゲームや wrapper を追加するとき何を共通化すべきか」を記録します。
 コードを一部だけ読む実装者や AI が、局所的な型名から誤った抽象化を増やさないための設計契約です。
 
 ## 結論
@@ -15,13 +15,12 @@ mental-card-core
                 └── mtholdem-adapter
                       ↑
                       ├── mtholdem-cli
-                      ├── mtholdem-ffi
-                      └── mtholdem-wasm
+                      └── mtholdem-ffi
 
 mtholdem-testkit depends on production crates only as a downstream dev/test helper.
 ```
 
-依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver や testkit を知りません。
+依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver、adapter、wrapper、testkit を知りません。
 これにより production verification crate が transport loop や deterministic test RNG を誤って取り込む
 依存 cycle を避けています。
 
@@ -114,17 +113,18 @@ P2P multiplayer には local identity、key share、message ordering、replay re
 必要です。一方で socket、timer、database、UI は deployment ごとに異なります。`mtholdem-peer` は
 `SignedPublicMessage`、`SignedPrivateReveal`、`HandCryptography`、checkpoint/recovery artifact を
 直接 orchestration し、transport には typed `HostEffect` を返すだけにします。これにより CLI、FFI、
-WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
+downstream WASM/npm package、Godot wrapper は同じ Rust-owned peer state を包めます。
 
 ## target wrapper を peer session の外に置く理由
 
-CLI、WASM、C ABI、Godot の各 integration は必要な ABI、buffer ownership、error reporting、runtime
-packaging が異なります。一方で、public/private artifact の妥当性、action legality、recovery、
-showdown、final result は `mtholdem-peer` が一度だけ検証すべきです。
+CLI、C ABI、downstream WASM package、Godot の各 integration は必要な ABI、buffer ownership、error
+reporting、runtime packaging が異なります。一方で、public/private artifact の妥当性、action
+legality、recovery、showdown、final result は `mtholdem-peer` が一度だけ検証すべきです。
 
 `mtholdem-adapter` は typed `HostEffect` を byte-oriented event、primitive action/status、stable error
 code へ変換します。`mtholdem-ffi` だけが C ABI のために `unsafe` を許可し、opaque handle と
-明示的な buffer free API を公開します。Godot GDExtension は別 repository に置き、この C ABI を
+明示的な buffer free API を公開します。WASM/npm package は別 repository に置き、Rust adapter
+boundary を直接 consume します。Godot GDExtension も別 repository に置き、この C ABI を
 `PackedByteArray` や Godot 側の value に変換します。
 
 ## naming
@@ -133,7 +133,7 @@ code へ変換します。`mtholdem-ffi` だけが C ABI のために `unsafe` �
 - `mtholdem-peer`: transport-neutral peer-session orchestration を表すため product prefix を維持。
 - `mtholdem-adapter`: target-neutral boundary adapter であり、protocol facade ではないことを表す。
 - `mtholdem-ffi`: C ABI を所有する唯一の unsafe 境界であることを表す。
-- `mtholdem-cli` / `mtholdem-wasm`: shared adapter を使う target wrapper であることを表す。
+- `mtholdem-cli`: shared adapter を使う scriptable target wrapper であることを表す。
 - `mental-card-core`: poker 以外にも使えるが、standard-card secret-state protocol であることを表現。
 - `mtholdem-testkit`: Hold'em config と wrapper を含むため product prefix を維持。
 
@@ -144,7 +144,7 @@ code へ変換します。`mtholdem-ffi` だけが C ABI のために `unsafe` �
 ## release and versioning
 
 workspace crate は同じ workspace version を使います。release order は `mental-card-core`、
-`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、target wrapper、`mtholdem-testkit` です。
+`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、in-workspace target wrapper、`mtholdem-testkit` です。
 downstream package の Cargo verification は、依存する同 version の crate が registry に公開された後に
 実行します。
 
