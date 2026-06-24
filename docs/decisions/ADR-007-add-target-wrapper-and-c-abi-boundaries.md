@@ -1,7 +1,7 @@
 # ADR-007: Add Target Wrapper and C ABI Boundaries
 
 ## Status
-Accepted; amended by ADR-008
+Accepted; amended by ADR-008 and ADR-009
 
 ## Date
 2026-06-24
@@ -68,3 +68,5 @@ vectors, but it must not own GDExtension build files or Godot-specific bindings.
   GDExtension target.
 - ADR-008 later removes the in-workspace WASM helper while keeping `mtholdem-adapter` as the
   shared Rust boundary for downstream WASM/npm packages.
+- ADR-009 later makes the official C header, C-visible constants, and ABI layout/version checks
+  part of the `mtholdem-ffi` release contract for downstream native wrappers.

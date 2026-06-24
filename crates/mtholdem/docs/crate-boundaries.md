@@ -145,9 +145,13 @@ typed `mtholdem-peer` effects and actions into byte-oriented boundary values.
 
 `mtholdem-cli` and `mtholdem-ffi` own only the outside of that adapter boundary.
 The C ABI exposes opaque handles, ABI versions, and caller-visible buffer
-ownership; it does not expose Rust struct layout. WASM/npm packages should live
-outside this workspace and consume the Rust adapter boundary. Godot GDExtension
-should also live outside this workspace and consume the C ABI.
+ownership; it does not expose Rust struct layout. The C ABI release contract also
+includes the official C header, C-visible constants, and layout/version checks
+described in
+[ADR-009](../../../docs/decisions/ADR-009-publish-c-abi-header-and-constants.md).
+WASM/npm packages should live outside this workspace and consume the Rust
+adapter boundary. Godot GDExtension should also live outside this workspace and
+consume the C ABI.
 
 ## Naming
 

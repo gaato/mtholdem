@@ -10,8 +10,8 @@
 //! or interpret recovery outcomes.
 //!
 //! Ownership is explicit at the boundary: buffers returned by this library must be
-//! released with [`mth9_buffer_free`] or [`mth9_effect_free`], and handles returned by
-//! [`mth9_peer_session_new`] must be released with [`mth9_peer_session_free`].
+//! released with [`mth_buffer_free`] or [`mth_effect_free`], and handles returned by
+//! [`mth_peer_session_new`] must be released with [`mth_peer_session_free`].
 //!
 //! # Audience and boundary
 //!
@@ -35,23 +35,23 @@
 //! input, drains effects, and frees every object returned by this library:
 //!
 //! ```c
-//! Mth9PeerSession *session = NULL;
-//! int rc = mth9_peer_session_new(config, identity_seed, local_seat, hand, &session);
+//! MthPeerSession *session = NULL;
+//! int rc = mth_peer_session_new(config, identity_seed, local_seat, hand, &session);
 //! if (rc != 0) {
-//!     /* Read mth9_last_error_message because no handle may exist. */
+//!     /* Read mth_last_error_message because no handle may exist. */
 //!     return rc;
 //! }
 //!
-//! rc = mth9_peer_session_progress(session);
+//! rc = mth_peer_session_progress(session);
 //! if (rc != 0) {
-//!     /* Read mth9_peer_session_last_error(session, ...). */
-//!     mth9_peer_session_free(session);
+//!     /* Read mth_peer_session_last_error(session, ...). */
+//!     mth_peer_session_free(session);
 //!     return rc;
 //! }
 //!
 //! for (;;) {
-//!     Mth9Effect effect;
-//!     rc = mth9_peer_session_next_effect(session, &effect);
+//!     MthEffect effect;
+//!     rc = mth_peer_session_next_effect(session, &effect);
 //!     if (rc == 4) {
 //!         break; /* No queued effect. */
 //!     }
@@ -59,27 +59,27 @@
 //!         break;
 //!     }
 //!     /* Route, persist, or inspect effect fields here. */
-//!     mth9_effect_free(effect);
+//!     mth_effect_free(effect);
 //! }
 //!
-//! mth9_peer_session_free(session);
+//! mth_peer_session_free(session);
 //! ```
 //!
 //! # Ownership and allocation
 //!
-//! `Mth9PeerSession` pointers, [`Mth9Buffer`] values, and [`Mth9Effect`] values are
+//! `MthPeerSession` pointers, [`MthBuffer`] values, and [`MthEffect`] values are
 //! owned by the caller after a successful return. Pass each one back to the matching
 //! free function exactly once. Do not free Rust allocations with the host allocator,
-//! modify `Mth9Buffer.cap`, reuse a freed handle, or copy an owned buffer and free both
+//! modify `MthBuffer.cap`, reuse a freed handle, or copy an owned buffer and free both
 //! copies.
 //!
 //! # Error reporting
 //!
 //! Functions return integer status codes from the shared boundary error-code set. A
 //! zero return means success. `NoEffect` is a normal empty-queue result from
-//! [`mth9_peer_session_next_effect`]. For handle operations, read
-//! [`mth9_peer_session_last_error`] after nonzero failures. For construction failures
-//! where no handle exists, read [`mth9_last_error_message`].
+//! [`mth_peer_session_next_effect`]. For handle operations, read
+//! [`mth_peer_session_last_error`] after nonzero failures. For construction failures
+//! where no handle exists, read [`mth_last_error_message`].
 //!
 //! # Threading
 //!
@@ -119,20 +119,20 @@ const PANIC_ERROR_MESSAGE: &str = "Rust panic crossed the C ABI boundary";
 ///
 /// The handle keeps Rust-only state behind a stable pointer: the typed peer session,
 /// its CSPRNG, queued boundary effects, and the last handle-local error message.
-pub struct Mth9PeerSession {
+pub struct MthPeerSession {
     session: PeerSession,
     rng: OsRng,
     pending_effects: VecDeque<BoundaryEffect>,
     last_error: Vec<u8>,
 }
 
-/// Immutable session configuration supplied to `mth9_peer_session_new`.
+/// Immutable session configuration supplied to `mth_peer_session_new`.
 ///
 /// Pointers are borrowed only for the duration of construction. After the handle is
 /// created, the Rust side owns validated copies of the session id and roster keys.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct Mth9SessionConfig {
+pub struct MthSessionConfig {
     /// Pointer to 32 nonzero session-id bytes.
     pub session_id_ptr: *const u8,
     /// Pointer to `player_count * 32` Ed25519 public-key bytes in seat order.
@@ -158,21 +158,21 @@ pub struct Mth9SessionConfig {
 /// Owned byte buffer returned across the C ABI.
 ///
 /// A non-null pointer always represents a Rust allocation owned by the caller until it
-/// is passed back to [`mth9_buffer_free`]. Empty buffers use a null pointer with zero
+/// is passed back to [`mth_buffer_free`]. Empty buffers use a null pointer with zero
 /// length and capacity. The `cap` field is part of the allocation token needed for
 /// freeing; callers must preserve it unchanged.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct Mth9Buffer {
+pub struct MthBuffer {
     /// Pointer to the first byte, or null for an empty buffer.
     pub ptr: *mut u8,
     /// Number of initialized bytes.
     pub len: usize,
-    /// Allocation capacity retained for `mth9_buffer_free`; do not modify it.
+    /// Allocation capacity retained for `mth_buffer_free`; do not modify it.
     pub cap: usize,
 }
 
-impl Mth9Buffer {
+impl MthBuffer {
     const fn empty() -> Self {
         Self {
             ptr: ptr::null_mut(),
@@ -197,12 +197,12 @@ impl Mth9Buffer {
 
 /// One encoded host effect returned across the C ABI.
 ///
-/// After a successful [`mth9_peer_session_next_effect`] call, the caller owns the
+/// After a successful [`mth_peer_session_next_effect`] call, the caller owns the
 /// buffers embedded in this value and must pass the whole effect to
-/// [`mth9_effect_free`] exactly once.
+/// [`mth_effect_free`] exactly once.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct Mth9Effect {
+pub struct MthEffect {
     /// One of [`BoundaryEffectKind`]'s integer values.
     pub kind: u32,
     /// Whether `seat` is meaningful.
@@ -230,18 +230,18 @@ pub struct Mth9Effect {
     /// Current transcript digest.
     pub transcript_digest: [u8; 32],
     /// Primary encoded artifact for message, bundle, or recovery effects.
-    pub artifact: Mth9Buffer,
+    pub artifact: MthBuffer,
     /// Optional certified checkpoint bytes for persist effects.
-    pub checkpoint: Mth9Buffer,
+    pub checkpoint: MthBuffer,
     /// Final stacks as little-endian `u64` chip units in table seat order.
-    pub final_stacks: Mth9Buffer,
+    pub final_stacks: MthBuffer,
     /// Whether final-hand fields are meaningful.
     pub has_finished: bool,
     /// Completed hand number.
     pub finished_hand: u64,
 }
 
-impl Mth9Effect {
+impl MthEffect {
     const fn empty() -> Self {
         Self {
             kind: 0,
@@ -257,16 +257,16 @@ impl Mth9Effect {
             has_transcript_anchor: false,
             next_sequence: 0,
             transcript_digest: [0; 32],
-            artifact: Mth9Buffer::empty(),
-            checkpoint: Mth9Buffer::empty(),
-            final_stacks: Mth9Buffer::empty(),
+            artifact: MthBuffer::empty(),
+            checkpoint: MthBuffer::empty(),
+            final_stacks: MthBuffer::empty(),
             has_finished: false,
             finished_hand: 0,
         }
     }
 }
 
-impl From<BoundaryEffect> for Mth9Effect {
+impl From<BoundaryEffect> for MthEffect {
     fn from(value: BoundaryEffect) -> Self {
         let mut effect = Self::empty();
         effect.kind = boundary_effect_kind_code(value.kind());
@@ -298,11 +298,11 @@ impl From<BoundaryEffect> for Mth9Effect {
             effect.next_sequence = anchor.next_sequence();
             effect.transcript_digest = anchor.digest();
             effect.final_stacks =
-                Mth9Buffer::from_vec(encode_u64_slice(finished.final_stacks_units()));
+                MthBuffer::from_vec(encode_u64_slice(finished.final_stacks_units()));
         }
-        effect.artifact = Mth9Buffer::from_vec(value.artifact().to_vec());
+        effect.artifact = MthBuffer::from_vec(value.artifact().to_vec());
         effect.checkpoint =
-            Mth9Buffer::from_vec(value.checkpoint().map_or_else(Vec::new, <[u8]>::to_vec));
+            MthBuffer::from_vec(value.checkpoint().map_or_else(Vec::new, <[u8]>::to_vec));
         effect
     }
 }
@@ -310,7 +310,7 @@ impl From<BoundaryEffect> for Mth9Effect {
 /// Read-only peer status returned across the C ABI.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct Mth9PeerStatus {
+pub struct MthPeerStatus {
     /// One of [`BoundaryPeerPhase`]'s integer values.
     pub phase: u32,
     /// Local peer seat.
@@ -327,19 +327,19 @@ pub struct Mth9PeerStatus {
 
 /// Returns the C ABI major version.
 #[unsafe(no_mangle)]
-pub const extern "C" fn mth9_abi_version_major() -> u32 {
+pub const extern "C" fn mth_abi_version_major() -> u32 {
     ABI_VERSION_MAJOR
 }
 
 /// Returns the C ABI minor version.
 #[unsafe(no_mangle)]
-pub const extern "C" fn mth9_abi_version_minor() -> u32 {
+pub const extern "C" fn mth_abi_version_minor() -> u32 {
     ABI_VERSION_MINOR
 }
 
 /// Returns the C ABI patch version.
 #[unsafe(no_mangle)]
-pub const extern "C" fn mth9_abi_version_patch() -> u32 {
+pub const extern "C" fn mth_abi_version_patch() -> u32 {
     ABI_VERSION_PATCH
 }
 
@@ -350,12 +350,12 @@ pub const extern "C" fn mth9_abi_version_patch() -> u32 {
 /// `buffer` must be a live buffer value returned by this library, and it must not
 /// have been freed before. Callers must preserve `ptr`, `len`, and `cap` exactly.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_buffer_free(buffer: Mth9Buffer) {
+pub unsafe extern "C" fn mth_buffer_free(buffer: MthBuffer) {
     if buffer.ptr.is_null() {
         return;
     }
-    // SAFETY: `Mth9Buffer` values returned by this library are created with
-    // `Vec::into_raw_parts`-equivalent ownership in `Mth9Buffer::from_vec`. Callers must
+    // SAFETY: `MthBuffer` values returned by this library are created with
+    // `Vec::into_raw_parts`-equivalent ownership in `MthBuffer::from_vec`. Callers must
     // pass each owned buffer back at most once.
     unsafe {
         drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap));
@@ -369,13 +369,13 @@ pub unsafe extern "C" fn mth9_buffer_free(buffer: Mth9Buffer) {
 /// `effect` must be a live effect value returned by this library, and it must not
 /// have been freed before. Callers must preserve embedded buffer fields exactly.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_effect_free(effect: Mth9Effect) {
+pub unsafe extern "C" fn mth_effect_free(effect: MthEffect) {
     // SAFETY: The caller's contract for this effect also covers both embedded
     // buffers, which were allocated by this library and have not been freed before.
     unsafe {
-        mth9_buffer_free(effect.artifact);
-        mth9_buffer_free(effect.checkpoint);
-        mth9_buffer_free(effect.final_stacks);
+        mth_buffer_free(effect.artifact);
+        mth_buffer_free(effect.checkpoint);
+        mth_buffer_free(effect.final_stacks);
     }
 }
 
@@ -387,12 +387,12 @@ pub unsafe extern "C" fn mth9_effect_free(effect: Mth9Effect) {
 /// `config` and `local_identity_seed_ptr` must be readable for the documented byte
 /// lengths for the duration of this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_new(
-    config: Mth9SessionConfig,
+pub unsafe extern "C" fn mth_peer_session_new(
+    config: MthSessionConfig,
     local_identity_seed_ptr: *const u8,
     local_seat: u8,
     hand: u64,
-    out_handle: *mut *mut Mth9PeerSession,
+    out_handle: *mut *mut MthPeerSession,
 ) -> i32 {
     if out_handle.is_null() {
         return code(BoundaryErrorCode::NullPointer);
@@ -420,18 +420,18 @@ pub unsafe extern "C" fn mth9_peer_session_new(
     }
 }
 
-/// Frees a peer-session handle returned by `mth9_peer_session_new`.
+/// Frees a peer-session handle returned by `mth_peer_session_new`.
 ///
 /// # Safety
 ///
-/// `handle` must be null or a live pointer returned by [`mth9_peer_session_new`].
+/// `handle` must be null or a live pointer returned by [`mth_peer_session_new`].
 /// Each non-null handle must be freed at most once and must not be used afterward.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_free(handle: *mut Mth9PeerSession) {
+pub unsafe extern "C" fn mth_peer_session_free(handle: *mut MthPeerSession) {
     if handle.is_null() {
         return;
     }
-    // SAFETY: The pointer must have been returned by `mth9_peer_session_new` and not
+    // SAFETY: The pointer must have been returned by `mth_peer_session_new` and not
     // freed yet. Null is handled above.
     unsafe {
         drop(Box::from_raw(handle));
@@ -445,7 +445,7 @@ pub unsafe extern "C" fn mth9_peer_session_free(handle: *mut Mth9PeerSession) {
 /// `handle` must be null or a live peer-session pointer returned by this library.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_progress(handle: *mut Mth9PeerSession) -> i32 {
+pub unsafe extern "C" fn mth_peer_session_progress(handle: *mut MthPeerSession) -> i32 {
     with_handle(handle, |handle| handle.session.progress(&mut handle.rng))
 }
 
@@ -457,8 +457,8 @@ pub unsafe extern "C" fn mth9_peer_session_progress(handle: *mut Mth9PeerSession
 /// `bytes_ptr` must be readable for `bytes_len` bytes when `bytes_len` is nonzero.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_apply_public(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_apply_public(
+    handle: *mut MthPeerSession,
     bytes_ptr: *const u8,
     bytes_len: usize,
 ) -> i32 {
@@ -475,8 +475,8 @@ pub unsafe extern "C" fn mth9_peer_session_apply_public(
 /// `bytes_ptr` must be readable for `bytes_len` bytes when `bytes_len` is nonzero.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_apply_private(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_apply_private(
+    handle: *mut MthPeerSession,
     bytes_ptr: *const u8,
     bytes_len: usize,
 ) -> i32 {
@@ -493,8 +493,8 @@ pub unsafe extern "C" fn mth9_peer_session_apply_private(
 /// `bytes_ptr` must be readable for `bytes_len` bytes when `bytes_len` is nonzero.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_apply_checkpoint(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_apply_checkpoint(
+    handle: *mut MthPeerSession,
     bytes_ptr: *const u8,
     bytes_len: usize,
 ) -> i32 {
@@ -512,8 +512,8 @@ pub unsafe extern "C" fn mth9_peer_session_apply_checkpoint(
 /// `bytes_ptr` must be readable for `bytes_len` bytes when `bytes_len` is nonzero.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_announce_checkpoint(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_announce_checkpoint(
+    handle: *mut MthPeerSession,
     bytes_ptr: *const u8,
     bytes_len: usize,
 ) -> i32 {
@@ -531,8 +531,8 @@ pub unsafe extern "C" fn mth9_peer_session_announce_checkpoint(
 /// `bytes_ptr` must be readable for `bytes_len` bytes when `bytes_len` is nonzero.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_apply_showdown(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_apply_showdown(
+    handle: *mut MthPeerSession,
     bytes_ptr: *const u8,
     bytes_len: usize,
 ) -> i32 {
@@ -549,8 +549,8 @@ pub unsafe extern "C" fn mth9_peer_session_apply_showdown(
 /// `handle` must be null or a live peer-session pointer returned by this library.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_submit_action(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_submit_action(
+    handle: *mut MthPeerSession,
     action_kind: u32,
     raise_to_units: u64,
 ) -> i32 {
@@ -569,12 +569,12 @@ pub unsafe extern "C" fn mth9_peer_session_submit_action(
 /// # Safety
 ///
 /// `handle` must be null or a live peer-session pointer returned by this library.
-/// `out_buffer` must be writable for one [`Mth9Buffer`] value when non-null. Calls
+/// `out_buffer` must be writable for one [`MthBuffer`] value when non-null. Calls
 /// using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_checkpoint_state(
-    handle: *mut Mth9PeerSession,
-    out_buffer: *mut Mth9Buffer,
+pub unsafe extern "C" fn mth_peer_session_checkpoint_state(
+    handle: *mut MthPeerSession,
+    out_buffer: *mut MthBuffer,
 ) -> i32 {
     with_output_buffer(handle, out_buffer, |handle| {
         encode_checkpoint_state(&handle.session.checkpoint_state()?)
@@ -586,12 +586,12 @@ pub unsafe extern "C" fn mth9_peer_session_checkpoint_state(
 /// # Safety
 ///
 /// `handle` must be null or a live peer-session pointer returned by this library.
-/// `out_buffer` must be writable for one [`Mth9Buffer`] value when non-null. Calls
+/// `out_buffer` must be writable for one [`MthBuffer`] value when non-null. Calls
 /// using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_recovery_bundle(
-    handle: *mut Mth9PeerSession,
-    out_buffer: *mut Mth9Buffer,
+pub unsafe extern "C" fn mth_peer_session_recovery_bundle(
+    handle: *mut MthPeerSession,
+    out_buffer: *mut MthBuffer,
 ) -> i32 {
     with_output_buffer(handle, out_buffer, |handle| {
         encode_recovery_bundle(&handle.session.recovery_bundle()?)
@@ -605,7 +605,7 @@ pub unsafe extern "C" fn mth9_peer_session_recovery_bundle(
 /// `handle` must be null or a live peer-session pointer returned by this library.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_request_recovery(handle: *mut Mth9PeerSession) -> i32 {
+pub unsafe extern "C" fn mth_peer_session_request_recovery(handle: *mut MthPeerSession) -> i32 {
     with_handle(handle, |handle| handle.session.request_recovery())
 }
 
@@ -614,12 +614,12 @@ pub unsafe extern "C" fn mth9_peer_session_request_recovery(handle: *mut Mth9Pee
 /// # Safety
 ///
 /// `handle` must be null or a live peer-session pointer returned by this library.
-/// `out_status` must be writable for one [`Mth9PeerStatus`] value when non-null.
+/// `out_status` must be writable for one [`MthPeerStatus`] value when non-null.
 /// Calls using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_status(
-    handle: *mut Mth9PeerSession,
-    out_status: *mut Mth9PeerStatus,
+pub unsafe extern "C" fn mth_peer_session_status(
+    handle: *mut MthPeerSession,
+    out_status: *mut MthPeerStatus,
 ) -> i32 {
     if out_status.is_null() {
         return code(BoundaryErrorCode::NullPointer);
@@ -633,7 +633,7 @@ pub unsafe extern "C" fn mth9_peer_session_status(
         let next_public_sender = status.next_public_sender();
         // SAFETY: `out_status` was checked for null and receives a plain C-compatible value.
         unsafe {
-            *out_status = Mth9PeerStatus {
+            *out_status = MthPeerStatus {
                 phase: boundary_peer_phase_code(status.phase().into()),
                 local_seat: status.local_seat().to_u8(),
                 has_next_public_sender: next_public_sender.is_some(),
@@ -652,17 +652,17 @@ pub unsafe extern "C" fn mth9_peer_session_status(
 /// Pops the next queued host effect into `out_effect`.
 ///
 /// `NoEffect` means the queue is empty and is not a protocol failure. On success, the
-/// caller owns the returned effect and must release it with [`mth9_effect_free`].
+/// caller owns the returned effect and must release it with [`mth_effect_free`].
 ///
 /// # Safety
 ///
 /// `handle` must be null or a live peer-session pointer returned by this library.
-/// `out_effect` must be writable for one [`Mth9Effect`] value when non-null. Calls
+/// `out_effect` must be writable for one [`MthEffect`] value when non-null. Calls
 /// using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_next_effect(
-    handle: *mut Mth9PeerSession,
-    out_effect: *mut Mth9Effect,
+pub unsafe extern "C" fn mth_peer_session_next_effect(
+    handle: *mut MthPeerSession,
+    out_effect: *mut MthEffect,
 ) -> i32 {
     if out_effect.is_null() {
         return code(BoundaryErrorCode::NullPointer);
@@ -700,8 +700,8 @@ pub unsafe extern "C" fn mth9_peer_session_next_effect(
 /// must be writable for `out_len` bytes when the last error is non-empty. Calls
 /// using the same handle must be serialized by the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_peer_session_last_error(
-    handle: *mut Mth9PeerSession,
+pub unsafe extern "C" fn mth_peer_session_last_error(
+    handle: *mut MthPeerSession,
     out_ptr: *mut u8,
     out_len: usize,
     out_required_len: *mut usize,
@@ -736,7 +736,7 @@ pub unsafe extern "C" fn mth9_peer_session_last_error(
 /// Copies the last thread-local error message into a caller-owned buffer.
 ///
 /// This is primarily for construction failures where no peer-session handle exists yet.
-/// Once a handle exists, prefer [`mth9_peer_session_last_error`] for failures returned
+/// Once a handle exists, prefer [`mth_peer_session_last_error`] for failures returned
 /// by handle-scoped operations.
 ///
 /// # Safety
@@ -744,7 +744,7 @@ pub unsafe extern "C" fn mth9_peer_session_last_error(
 /// `out_required_len` must be writable for one `usize` when non-null. `out_ptr`
 /// must be writable for `out_len` bytes when the last error is non-empty.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth9_last_error_message(
+pub unsafe extern "C" fn mth_last_error_message(
     out_ptr: *mut u8,
     out_len: usize,
     out_required_len: *mut usize,
@@ -753,11 +753,11 @@ pub unsafe extern "C" fn mth9_last_error_message(
 }
 
 fn build_session(
-    config: Mth9SessionConfig,
+    config: MthSessionConfig,
     local_identity_seed_ptr: *const u8,
     local_seat: u8,
     hand: u64,
-) -> Result<Mth9PeerSession, Error> {
+) -> Result<MthPeerSession, Error> {
     let session_id = SessionId::from_bytes(read_array::<32>(config.session_id_ptr)?)?;
     let keys = read_bytes(
         config.roster_public_keys_ptr,
@@ -798,7 +798,7 @@ fn build_session(
         Seat::from_u8(local_seat)?,
         HandNumber::from_u64(hand),
     )?;
-    Ok(Mth9PeerSession {
+    Ok(MthPeerSession {
         session,
         rng: OsRng,
         pending_effects: VecDeque::new(),
@@ -807,8 +807,8 @@ fn build_session(
 }
 
 fn with_handle(
-    handle: *mut Mth9PeerSession,
-    operation: impl FnOnce(&mut Mth9PeerSession) -> Result<(), Error>,
+    handle: *mut MthPeerSession,
+    operation: impl FnOnce(&mut MthPeerSession) -> Result<(), Error>,
 ) -> i32 {
     let Some(handle) = checked_handle(handle) else {
         return code(BoundaryErrorCode::NullPointer);
@@ -825,10 +825,10 @@ fn with_handle(
 }
 
 fn with_handle_and_bytes(
-    handle: *mut Mth9PeerSession,
+    handle: *mut MthPeerSession,
     bytes_ptr: *const u8,
     bytes_len: usize,
-    operation: impl FnOnce(&mut Mth9PeerSession, &[u8]) -> Result<(), Error>,
+    operation: impl FnOnce(&mut MthPeerSession, &[u8]) -> Result<(), Error>,
 ) -> i32 {
     let Some(handle) = checked_handle(handle) else {
         return code(BoundaryErrorCode::NullPointer);
@@ -849,9 +849,9 @@ fn with_handle_and_bytes(
 }
 
 fn with_output_buffer(
-    handle: *mut Mth9PeerSession,
-    out_buffer: *mut Mth9Buffer,
-    operation: impl FnOnce(&mut Mth9PeerSession) -> Result<Vec<u8>, Error>,
+    handle: *mut MthPeerSession,
+    out_buffer: *mut MthBuffer,
+    operation: impl FnOnce(&mut MthPeerSession) -> Result<Vec<u8>, Error>,
 ) -> i32 {
     if out_buffer.is_null() {
         return code(BoundaryErrorCode::NullPointer);
@@ -866,7 +866,7 @@ fn with_output_buffer(
             handle.last_error.clear();
             // SAFETY: `out_buffer` was checked for null and receives an owned buffer value.
             unsafe {
-                *out_buffer = Mth9Buffer::from_vec(bytes);
+                *out_buffer = MthBuffer::from_vec(bytes);
             }
             code(BoundaryErrorCode::Success)
         }
@@ -874,7 +874,7 @@ fn with_output_buffer(
     }
 }
 
-fn checked_handle<'a>(handle: *mut Mth9PeerSession) -> Option<&'a mut Mth9PeerSession> {
+fn checked_handle<'a>(handle: *mut MthPeerSession) -> Option<&'a mut MthPeerSession> {
     if handle.is_null() {
         return None;
     }
@@ -912,7 +912,7 @@ fn encode_u64_slice(values: &[u64]) -> Vec<u8> {
     bytes
 }
 
-fn store_error(handle: &mut Mth9PeerSession, error: &Error) -> i32 {
+fn store_error(handle: &mut MthPeerSession, error: &Error) -> i32 {
     handle.last_error.clear();
     handle
         .last_error
@@ -934,7 +934,7 @@ fn store_global_error(error: &Error) -> i32 {
     code(error.into())
 }
 
-fn store_panic(handle: &mut Mth9PeerSession) -> i32 {
+fn store_panic(handle: &mut MthPeerSession) -> i32 {
     handle.last_error.clear();
     handle
         .last_error
@@ -1038,14 +1038,14 @@ mod tests {
 
     #[test]
     fn abi_version_matches_adapter_boundary() {
-        assert_eq!(mth9_abi_version_major(), ABI_VERSION_MAJOR);
-        assert_eq!(mth9_abi_version_minor(), ABI_VERSION_MINOR);
-        assert_eq!(mth9_abi_version_patch(), ABI_VERSION_PATCH);
+        assert_eq!(mth_abi_version_major(), ABI_VERSION_MAJOR);
+        assert_eq!(mth_abi_version_minor(), ABI_VERSION_MINOR);
+        assert_eq!(mth_abi_version_patch(), ABI_VERSION_PATCH);
     }
 
     #[test]
     fn null_handle_status_returns_null_pointer() {
-        let mut status = Mth9PeerStatus {
+        let mut status = MthPeerStatus {
             phase: 0,
             local_seat: 0,
             has_next_public_sender: false,
@@ -1057,14 +1057,14 @@ mod tests {
         assert_eq!(
             // SAFETY: This test intentionally passes a null handle and a valid
             // status output pointer to verify the boundary error code.
-            unsafe { mth9_peer_session_status(ptr::null_mut(), &raw mut status) },
+            unsafe { mth_peer_session_status(ptr::null_mut(), &raw mut status) },
             code(BoundaryErrorCode::NullPointer)
         );
     }
 
     #[test]
     fn constructor_failure_sets_thread_local_error() {
-        let config = Mth9SessionConfig {
+        let config = MthSessionConfig {
             session_id_ptr: ptr::null(),
             roster_public_keys_ptr: ptr::null(),
             player_count: 0,
@@ -1079,7 +1079,7 @@ mod tests {
         let mut handle = ptr::null_mut();
         // SAFETY: This test intentionally passes null construction inputs and a valid
         // out-handle pointer to verify construction failure handling.
-        let status = unsafe { mth9_peer_session_new(config, ptr::null(), 0, 0, &raw mut handle) };
+        let status = unsafe { mth_peer_session_new(config, ptr::null(), 0, 0, &raw mut handle) };
 
         assert_eq!(status, code(BoundaryErrorCode::Configuration));
         assert!(handle.is_null());
@@ -1088,7 +1088,7 @@ mod tests {
         assert_eq!(
             // SAFETY: This test intentionally passes a null output buffer and a valid
             // required-length pointer to verify sizing/error behavior.
-            unsafe { mth9_last_error_message(ptr::null_mut(), 0, &raw mut required) },
+            unsafe { mth_last_error_message(ptr::null_mut(), 0, &raw mut required) },
             code(BoundaryErrorCode::NullPointer)
         );
         assert!(required > 0);
@@ -1113,16 +1113,16 @@ mod tests {
     }
 
     struct FfiSessions {
-        handles: Vec<*mut Mth9PeerSession>,
+        handles: Vec<*mut MthPeerSession>,
     }
 
     impl Drop for FfiSessions {
         fn drop(&mut self) {
             for handle in self.handles.drain(..) {
-                // SAFETY: These handles were returned by `mth9_peer_session_new` in this
+                // SAFETY: These handles were returned by `mth_peer_session_new` in this
                 // test and are freed exactly once here.
                 unsafe {
-                    mth9_peer_session_free(handle);
+                    mth_peer_session_free(handle);
                 }
             }
         }
@@ -1136,7 +1136,7 @@ mod tests {
             for seed in seeds {
                 public_keys.extend_from_slice(&IdentitySecret::from_seed(seed).public().to_bytes());
             }
-            let config = Mth9SessionConfig {
+            let config = MthSessionConfig {
                 session_id_ptr: session_id.as_ptr(),
                 roster_public_keys_ptr: public_keys.as_ptr(),
                 player_count: seeds.len(),
@@ -1154,7 +1154,7 @@ mod tests {
                 // SAFETY: `config` points to live local arrays for the duration of this
                 // call, `seed` is readable for 32 bytes, and `handle` is a valid out pointer.
                 let status = unsafe {
-                    mth9_peer_session_new(
+                    mth_peer_session_new(
                         config,
                         seed.as_ptr(),
                         u8::try_from(index).expect("test seat index fits in u8"),
@@ -1170,7 +1170,7 @@ mod tests {
         }
     }
 
-    fn copy_buffer(buffer: Mth9Buffer) -> Vec<u8> {
+    fn copy_buffer(buffer: MthBuffer) -> Vec<u8> {
         if buffer.ptr.is_null() {
             assert_eq!(buffer.len, 0);
             return Vec::new();
@@ -1180,7 +1180,7 @@ mod tests {
         unsafe { slice::from_raw_parts(buffer.ptr, buffer.len).to_vec() }
     }
 
-    fn decode_u64_buffer(buffer: Mth9Buffer) -> Vec<u64> {
+    fn decode_u64_buffer(buffer: MthBuffer) -> Vec<u64> {
         let bytes = copy_buffer(buffer);
         assert_eq!(bytes.len() % size_of::<u64>(), 0);
         bytes
@@ -1193,12 +1193,12 @@ mod tests {
             .collect()
     }
 
-    fn drain_effects(handle: *mut Mth9PeerSession) -> Vec<DrainedEffect> {
+    fn drain_effects(handle: *mut MthPeerSession) -> Vec<DrainedEffect> {
         let mut output = Vec::new();
         loop {
-            let mut effect = Mth9Effect::empty();
+            let mut effect = MthEffect::empty();
             // SAFETY: `handle` is a live test handle and `effect` is a valid out pointer.
-            let status = unsafe { mth9_peer_session_next_effect(handle, &raw mut effect) };
+            let status = unsafe { mth_peer_session_next_effect(handle, &raw mut effect) };
             if status == code(BoundaryErrorCode::NoEffect) {
                 break;
             }
@@ -1212,10 +1212,10 @@ mod tests {
                 final_stacks: decode_u64_buffer(effect.final_stacks),
                 has_finished: effect.has_finished,
             };
-            // SAFETY: This effect was just returned by `mth9_peer_session_next_effect`
+            // SAFETY: This effect was just returned by `mth_peer_session_next_effect`
             // and is freed exactly once after copying its buffers.
             unsafe {
-                mth9_effect_free(effect);
+                mth_effect_free(effect);
             }
             output.push(drained);
         }
@@ -1223,7 +1223,7 @@ mod tests {
     }
 
     fn progress_and_drain(
-        sessions: &[Mth9PeerSessionHandle],
+        sessions: &[MthPeerSessionHandle],
         queue: &mut VecDeque<QueuedEffect>,
         finished_stacks: &mut [Vec<Vec<u64>>],
         index: usize,
@@ -1231,17 +1231,17 @@ mod tests {
     ) {
         // SAFETY: Handles are live for the duration of the test and calls are serialized.
         assert_eq!(
-            unsafe { mth9_peer_session_progress(sessions[index].0) },
+            unsafe { mth_peer_session_progress(sessions[index].0) },
             code(BoundaryErrorCode::Success)
         );
         handle_effects(sessions, queue, finished_stacks, index, call_or_check);
     }
 
     #[derive(Clone, Copy)]
-    struct Mth9PeerSessionHandle(*mut Mth9PeerSession);
+    struct MthPeerSessionHandle(*mut MthPeerSession);
 
     fn handle_effects(
-        sessions: &[Mth9PeerSessionHandle],
+        sessions: &[MthPeerSessionHandle],
         queue: &mut VecDeque<QueuedEffect>,
         finished_stacks: &mut [Vec<Vec<u64>>],
         sender_index: usize,
@@ -1272,7 +1272,7 @@ mod tests {
                         // SAFETY: Handle is live and calls are serialized.
                         assert_eq!(
                             unsafe {
-                                mth9_peer_session_submit_action(
+                                mth_peer_session_submit_action(
                                     sessions[sender_index].0,
                                     action_kind,
                                     0,
@@ -1282,7 +1282,7 @@ mod tests {
                         );
                         // SAFETY: Handle is live and calls are serialized.
                         assert_eq!(
-                            unsafe { mth9_peer_session_progress(sessions[sender_index].0) },
+                            unsafe { mth_peer_session_progress(sessions[sender_index].0) },
                             code(BoundaryErrorCode::Success)
                         );
                     }
@@ -1308,7 +1308,7 @@ mod tests {
             .handles
             .iter()
             .copied()
-            .map(Mth9PeerSessionHandle)
+            .map(MthPeerSessionHandle)
             .collect();
         let mut queue = VecDeque::new();
         let mut finished_stacks = vec![Vec::new(); handles.len()];
@@ -1336,7 +1336,7 @@ mod tests {
                         // SAFETY: Handle is live and the byte slice is readable for this call.
                         assert_eq!(
                             unsafe {
-                                mth9_peer_session_apply_public(
+                                mth_peer_session_apply_public(
                                     handles[index].0,
                                     bytes.as_ptr(),
                                     bytes.len(),
@@ -1358,7 +1358,7 @@ mod tests {
                     // SAFETY: Handle is live and the byte slice is readable for this call.
                     assert_eq!(
                         unsafe {
-                            mth9_peer_session_apply_private(
+                            mth_peer_session_apply_private(
                                 handles[index].0,
                                 bytes.as_ptr(),
                                 bytes.len(),
@@ -1382,7 +1382,7 @@ mod tests {
                         // SAFETY: Handle is live and the byte slice is readable for this call.
                         assert_eq!(
                             unsafe {
-                                mth9_peer_session_apply_showdown(
+                                mth_peer_session_apply_showdown(
                                     handles[index].0,
                                     bytes.as_ptr(),
                                     bytes.len(),
@@ -1403,7 +1403,7 @@ mod tests {
         }
 
         for handle in &handles {
-            let mut status = Mth9PeerStatus {
+            let mut status = MthPeerStatus {
                 phase: 0,
                 local_seat: 0,
                 has_next_public_sender: false,
@@ -1413,7 +1413,7 @@ mod tests {
             };
             // SAFETY: Handle is live and `status` is a valid out pointer.
             assert_eq!(
-                unsafe { mth9_peer_session_status(handle.0, &raw mut status) },
+                unsafe { mth_peer_session_status(handle.0, &raw mut status) },
                 code(BoundaryErrorCode::Success)
             );
             assert_eq!(
