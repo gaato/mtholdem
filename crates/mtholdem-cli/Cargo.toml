@@ -1,0 +1,19 @@
+[package]
+name = "mtholdem-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Scriptable command-line wrapper for mtholdem peer sessions"
+
+[[bin]]
+name = "mtholdem"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+mtholdem-adapter.workspace = true
+
+[lints]
+workspace = true

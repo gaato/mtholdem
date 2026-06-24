@@ -37,6 +37,8 @@ pub enum BoundaryErrorCode {
     BufferTooSmall = 2,
     /// A primitive argument was outside its valid domain.
     InvalidArgument = 3,
+    /// No queued event or optional value was available.
+    NoEffect = 4,
     /// Session or table configuration was invalid.
     Configuration = 10,
     /// Wire bytes were malformed, truncated, non-canonical, or too large.
@@ -450,7 +452,7 @@ impl BoundaryEffect {
         self.finished
     }
 
-    fn public(message: SignedPublicMessage) -> Result<Self> {
+    fn public(message: &SignedPublicMessage) -> Result<Self> {
         Ok(Self {
             kind: BoundaryEffectKind::BroadcastPublic,
             seat: None,
@@ -466,7 +468,7 @@ impl BoundaryEffect {
 /// Converts typed peer-session effects into host-boundary effects.
 pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
     match effect {
-        HostEffect::BroadcastPublic(message) => BoundaryEffect::public(message),
+        HostEffect::BroadcastPublic(message) => BoundaryEffect::public(&message),
         HostEffect::SendPrivate { recipient, message } => Ok(BoundaryEffect {
             kind: BoundaryEffectKind::SendPrivate,
             seat: Some(recipient.to_u8()),

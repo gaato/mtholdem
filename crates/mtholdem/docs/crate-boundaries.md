@@ -10,8 +10,15 @@ mental-card-core
     ↑
     └── mtholdem
           ↑
-          ├── mtholdem-peer
-          └── mtholdem-testkit
+          └── mtholdem-peer
+                ↑
+                └── mtholdem-adapter
+                      ↑
+                      ├── mtholdem-cli
+                      ├── mtholdem-ffi
+                      └── mtholdem-wasm
+
+mtholdem-testkit depends on production crates only as a downstream dev/test helper.
 ```
 
 依存方向は一方向です。core は Hold'em を知らず、`mtholdem` は peer driver や testkit を知りません。
@@ -109,10 +116,24 @@ P2P multiplayer には local identity、key share、message ordering、replay re
 直接 orchestration し、transport には typed `HostEffect` を返すだけにします。これにより CLI、FFI、
 WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
 
+## target wrapper を peer session の外に置く理由
+
+CLI、WASM、C ABI、Godot の各 integration は必要な ABI、buffer ownership、error reporting、runtime
+packaging が異なります。一方で、public/private artifact の妥当性、action legality、recovery、
+showdown、final result は `mtholdem-peer` が一度だけ検証すべきです。
+
+`mtholdem-adapter` は typed `HostEffect` を byte-oriented event、primitive action/status、stable error
+code へ変換します。`mtholdem-ffi` だけが C ABI のために `unsafe` を許可し、opaque handle と
+明示的な buffer free API を公開します。Godot GDExtension は別 repository に置き、この C ABI を
+`PackedByteArray` や Godot 側の value に変換します。
+
 ## naming
 
 - `mtholdem`: Texas Hold'em rules/protocol crate であることを表すため維持。
 - `mtholdem-peer`: transport-neutral peer-session orchestration を表すため product prefix を維持。
+- `mtholdem-adapter`: target-neutral boundary adapter であり、protocol facade ではないことを表す。
+- `mtholdem-ffi`: C ABI を所有する唯一の unsafe 境界であることを表す。
+- `mtholdem-cli` / `mtholdem-wasm`: shared adapter を使う target wrapper であることを表す。
 - `mental-card-core`: poker 以外にも使えるが、standard-card secret-state protocol であることを表現。
 - `mtholdem-testkit`: Hold'em config と wrapper を含むため product prefix を維持。
 
@@ -122,9 +143,10 @@ WASM、Godot wrapper は同じ Rust-owned peer state を包めます。
 
 ## release and versioning
 
-3 crate は同じ workspace version を使います。release order は `mental-card-core`、`mtholdem`、
-`mtholdem-testkit` です。downstream package の Cargo verification は、依存する同 version の crate が
-registry に公開された後に実行します。
+workspace crate は同じ workspace version を使います。release order は `mental-card-core`、
+`mtholdem`、`mtholdem-peer`、`mtholdem-adapter`、target wrapper、`mtholdem-testkit` です。
+downstream package の Cargo verification は、依存する同 version の crate が registry に公開された後に
+実行します。
 
 wire version は crate version と独立です。crate split だけでは signed bytes を変えず、signed meaning
 が変わる場合のみ artifact version を上げます。

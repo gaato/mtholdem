@@ -3,8 +3,11 @@ members = [
     "crates/mental-card-core",
     "crates/mtholdem",
     "crates/mtholdem-adapter",
+    "crates/mtholdem-cli",
+    "crates/mtholdem-ffi",
     "crates/mtholdem-peer",
     "crates/mtholdem-testkit",
+    "crates/mtholdem-wasm",
 ]
 resolver = "2"
 
@@ -12,7 +15,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["OpenAI"]
+authors = ["Gakuto Furuya"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
@@ -25,8 +28,11 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = ["allo
 mental-card-core = { version = "0.1.0", path = "crates/mental-card-core" }
 mtholdem = { version = "0.1.0", path = "crates/mtholdem" }
 mtholdem-adapter = { version = "0.1.0", path = "crates/mtholdem-adapter" }
+mtholdem-cli = { version = "0.1.0", path = "crates/mtholdem-cli" }
+mtholdem-ffi = { version = "0.1.0", path = "crates/mtholdem-ffi" }
 mtholdem-peer = { version = "0.1.0", path = "crates/mtholdem-peer" }
 mtholdem-testkit = { version = "0.1.0", path = "crates/mtholdem-testkit" }
+mtholdem-wasm = { version = "0.1.0", path = "crates/mtholdem-wasm" }
 proptest = "1.6.0"
 rand = { version = "0.8.5", features = ["getrandom"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }

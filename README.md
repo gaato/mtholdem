@@ -2,7 +2,8 @@
 
 このリポジトリは、信頼できるディーラーを置かない P2P Texas Hold'em を実装するための
 **Sans-I/O Rust ワークスペース**です。初回公開版の API は、再利用可能な暗号カード層、
-Texas Hold'em 固有層、テスト支援層を別 crate として公開します。
+Texas Hold'em 固有層、transport-neutral peer 層、target wrapper 層、テスト支援層を
+別 crate として公開します。
 
 > **重要:** これは研究・試作用の未監査ソフトウェアです。独立した暗号監査、形式検証、
 > 本番環境での侵入試験は実施されていません。実金、賞金、換金可能な資産を扱う前に、
@@ -16,10 +17,16 @@ Texas Hold'em 固有層、テスト支援層を別 crate として公開しま�
 | [`mental-card-core`](crates/mental-card-core) | 52 枚標準デッキ、identity、roster、しきい値 ElGamal、鍵保有証明、検証可能 shuffle、public/private reveal、1 deal の暗号状態機械 | betting、Hold'em street、wire payload、checkpoint、recovery、settlement |
 | [`mtholdem`](crates/mtholdem) | no-limit Texas Hold'em ルール、deal plan、署名付き wire、public transcript、hole-card receipt、showdown、checkpoint、recovery evidence | socket、timer、database、blockchain 実装 |
 | [`mtholdem-peer`](crates/mtholdem-peer) | peer-local orchestration、public/private artifact routing、host effects、key/shuffle/hole-card/betting/board/checkpoint/recovery/showdown progression | socket、timer、database、UI、placeholder protocol refs |
+| [`mtholdem-adapter`](crates/mtholdem-adapter) | `HostEffect` を CLI/WASM/C ABI が共有する byte/event/action/error/status 境界へ変換 | protocol validation、transport、allocator をまたぐ FFI unsafe |
+| [`mtholdem-ffi`](crates/mtholdem-ffi) | opaque handle、ABI version、error code、caller-visible buffer ownership を持つ C ABI | protocol fallback、Godot 固有 binding、Rust struct layout の公開 |
+| [`mtholdem-wasm`](crates/mtholdem-wasm) | WASM package が使う target-neutral wrapper helper | JavaScript framework、`wasm-bindgen` 固定、browser transport |
+| [`mtholdem-cli`](crates/mtholdem-cli) | scriptable CLI entrypoint と adapter boundary introspection | daemon、relay、interactive UI |
 | [`mtholdem-testkit`](crates/mtholdem-testkit) | deterministic roster、設定、鍵生成、全員 shuffle の統合テスト fixture | 本番用乱数、検証 bypass、fake proof、秘密値の覗き見 API |
 
 `mtholdem` は Hold'em 固有の rules/protocol crate です。汎用カード暗号、identity、roster、
 deck state machine だけを利用する crate は `mental-card-core` に直接依存してください。
+Godot GDExtension はこの workspace には置かず、別 repository から `mtholdem-ffi` の C ABI を
+呼ぶ前提です。
 
 ## どこまで汎用化したか
 
@@ -107,6 +114,8 @@ protocol の feature として混ぜるべきではありません。commit-and-
 8. [`crates/mtholdem/src/holdem.rs`](crates/mtholdem/src/holdem.rs) と
    [`crates/mtholdem/src/betting.rs`](crates/mtholdem/src/betting.rs)
 9. [`crates/mtholdem-peer/src/lib.rs`](crates/mtholdem-peer/src/lib.rs)
+10. [`crates/mtholdem-adapter/src/lib.rs`](crates/mtholdem-adapter/src/lib.rs)
+11. [`crates/mtholdem-ffi/src/lib.rs`](crates/mtholdem-ffi/src/lib.rs)
 
 内部の shuffle 実装は
 [`crates/mental-card-core/src/crypto/bg_shuffle.rs`](crates/mental-card-core/src/crypto/bg_shuffle.rs)
@@ -121,6 +130,7 @@ Rust 1.85 以上が必要です。
 cargo test --locked --workspace --all-targets --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo run --locked -p mtholdem --example simulated_hand
+cargo run --locked -p mtholdem-cli -- abi-version
 ```
 
 最小の Hold'em session 設定例です。金額は integer chip unit で、浮動小数点は使用しません。

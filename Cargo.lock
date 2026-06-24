@@ -472,6 +472,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtholdem-cli"
+version = "0.1.0"
+dependencies = [
+ "mtholdem-adapter",
+]
+
+[[package]]
+name = "mtholdem-ffi"
+version = "0.1.0"
+dependencies = [
+ "mental-card-core",
+ "mtholdem",
+ "mtholdem-adapter",
+ "mtholdem-peer",
+ "rand 0.8.6",
+]
+
+[[package]]
 name = "mtholdem-peer"
 version = "0.1.0"
 dependencies = [
@@ -487,6 +505,13 @@ dependencies = [
  "mental-card-core",
  "mtholdem",
  "rand 0.8.6",
+]
+
+[[package]]
+name = "mtholdem-wasm"
+version = "0.1.0"
+dependencies = [
+ "mtholdem-adapter",
 ]
 
 [[package]]
