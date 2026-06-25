@@ -187,6 +187,10 @@ extracted only after the CLI runner and at least one downstream host need the sa
 Peer-backed execution is the reference path because it exercises P2P artifacts; a future rules-only
 backend may reuse the same table events for lightweight local play. See
 [ADR-011](decisions/ADR-011-keep-table-session-runner-host-side.md).
+If exported to C, table running uses a separate polling-oriented `mth_table_*`
+surface instead of `mth_peer_*`; first extract the Rust `TableEvent` boundary,
+then encode it for external hosts. See
+[ADR-012](decisions/ADR-012-add-separate-table-runner-c-abi-surface.md).
 
 ## `mtholdem-peer`
 

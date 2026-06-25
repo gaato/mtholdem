@@ -176,6 +176,13 @@ path; a future rules-only backend may use `mtholdem` plus `mtholdem-bot` for
 lightweight local play while preserving the same table events. See
 [ADR-011](decisions/ADR-011-keep-table-session-runner-host-side.md).
 
+If this table runner is exported through C, it must use a separate
+`mth_table_*` ABI surface rather than overloading the existing `mth_peer_*`
+peer-session handles. `mth_peer_*` remains the P2P artifact-routing boundary;
+`mth_table_*` is for local table events, explicit backend selection, bot seats,
+stack carry-over, and host action prompts. See
+[ADR-012](decisions/ADR-012-add-separate-table-runner-c-abi-surface.md).
+
 ## Naming
 
 - `mtholdem`: the Texas Hold'em rules/protocol crate.
