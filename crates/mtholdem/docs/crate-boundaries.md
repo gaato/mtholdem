@@ -186,6 +186,13 @@ peer-session handles. `mth_peer_*` remains the P2P artifact-routing boundary;
 stack carry-over, and host action prompts. See
 [ADR-012](../../../docs/decisions/ADR-012-add-separate-table-runner-c-abi-surface.md).
 
+Custom bot clients that join an open game are ordinary participants, not a
+special table-runner mode. They should use `mth_peer_*`, own their identity and
+transport integration, answer action effects in their host layer, and submit
+the same signed artifacts as human-controlled clients. The table runner may
+embed local bot seats for convenience, but it is not the external bot
+participation protocol.
+
 ## Naming
 
 - `mtholdem`: the Texas Hold'em rules/protocol crate.

@@ -196,6 +196,9 @@ If exported to C, table running uses a separate polling-oriented `mth_table_*`
 surface instead of `mth_peer_*`; first extract the Rust `TableEvent` boundary,
 then encode it for external hosts. See
 [ADR-012](../../../docs/decisions/ADR-012-add-separate-table-runner-c-abi-surface.md).
+Custom bots that join open games use the same `mth_peer_*` participant boundary
+as human clients; the table runner is only for local orchestration and
+single-player convenience.
 
 ## `mtholdem-peer`
 

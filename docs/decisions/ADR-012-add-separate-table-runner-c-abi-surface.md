@@ -36,6 +36,18 @@ The low-level and high-level boundaries are distinct:
   human action prompts, stack carry-over, button rotation, board events,
   showdown summaries, and final hand summaries.
 
+Open participant clients, including custom bots, use the low-level peer
+boundary. A bot client is not a special protocol role: it owns an identity,
+receives host effects, chooses actions at the application layer, and submits
+the same signed public, private, and showdown artifacts as a human-controlled
+client. Whether a seat is controlled by a human UI, local bot, remote service,
+script, or research agent is outside protocol consensus.
+
+`mth_table_*` is not the open bot-participation protocol. It may run local bot
+seats for single-player or convenience modes, but remote and custom bot clients
+should interoperate through `mth_peer_*` and the ordinary transport or wire
+protocol.
+
 The table ABI should follow the same C ABI discipline as ADR-009:
 
 - opaque handles with explicit `*_free`;
@@ -107,6 +119,14 @@ state from becoming the ABI.
 - Rejected: Peer and table runners have different responsibilities and
   lifecycles.
 
+### Make `mth_table_*` the custom-bot participant API
+- Pros: Gives bot authors a single high-level entrypoint.
+- Cons: Mixes local table orchestration with open network participation. It
+  hides artifact routing, transport ownership, identity, and transcript
+  responsibilities that remote participants must handle explicitly.
+- Rejected: Custom bots are ordinary participants and should target
+  `mth_peer_*`, while `mth_table_*` stays a local convenience runner.
+
 ### Expose Godot-shaped C ABI structs
 - Pros: Less conversion code in the first Godot wrapper.
 - Cons: Godot collection shapes, engine lifecycle, and GDExtension conventions
@@ -136,6 +156,8 @@ state from becoming the ABI.
 - `mth_peer_*` remains the multiplayer and artifact-routing ABI.
 - `mth_table_*` becomes the future local-play ABI for Godot and other external
   hosts.
+- Custom bot authors can target the same peer and wire API as human clients;
+  no bot-specific protocol role is needed.
 - Godot single-player can use `mth_table_*` without orchestrating multiple raw
   `PeerSession` handles.
 - The table ABI can expose both peer-backed and rules-only local play while
