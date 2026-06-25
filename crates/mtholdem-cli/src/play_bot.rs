@@ -6,6 +6,7 @@ use std::io::{self, BufRead, Write};
 use mental_card_core::identity::IdentitySecret;
 use mtholdem::betting::{BetAction, LegalActions, Street};
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
+use mtholdem::deal::DealPlan;
 use mtholdem::{Card, Chips, HandNumber, Seat, SessionId};
 use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
 use mtholdem_peer::{FinishedHand, HostEffect, PeerPhase, PeerSession};
@@ -23,6 +24,20 @@ struct Options {
     preset: BotPreset,
     human: Option<Seat>,
     hands: Option<u64>,
+    backend: Backend,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Backend {
+    Peer,
+}
+
+impl Backend {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Peer => "peer",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +62,41 @@ struct HandResult {
 struct SessionOutcome {
     completed_hands: u64,
     quit: bool,
+    final_stacks: Vec<Chips>,
+}
+
+#[derive(Clone, Debug)]
+struct TableState {
+    stacks: Vec<Chips>,
+    button: Seat,
+}
+
+impl TableState {
+    fn new(players: usize) -> Self {
+        Self {
+            stacks: vec![Chips::from_units(100); players],
+            button: Seat::new(0).expect("seat zero is valid"),
+        }
+    }
+
+    fn can_continue(&self) -> bool {
+        self.stacks.iter().filter(|stack| !stack.is_zero()).count() >= 2
+            && self.maximum_stack() >= Chips::from_units(2)
+    }
+
+    fn maximum_stack(&self) -> Chips {
+        self.stacks
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(Chips::from_units(100))
+    }
+
+    fn advance(&mut self, final_stacks: &[Chips]) {
+        self.stacks.clear();
+        self.stacks.extend_from_slice(final_stacks);
+        self.button = next_button(self.button, &self.stacks);
+    }
 }
 
 #[derive(Debug)]
@@ -110,6 +160,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         preset: BotPreset::Balanced,
         human: Some(Seat::new(0).expect("seat zero is valid")),
         hands: None,
+        backend: Backend::Peer,
     };
     let mut index = 0;
     while index < args.len() {
@@ -137,6 +188,10 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 index += 1;
                 options.hands = Some(parse_hands(args, index)?);
             }
+            "--backend" => {
+                index += 1;
+                options.backend = parse_backend(args.get(index).map(String::as_str))?;
+            }
             other => return Err(format!("unknown play-bot option: {other}")),
         }
         index += 1;
@@ -150,6 +205,13 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         }
     }
     Ok(options)
+}
+
+fn parse_backend(value: Option<&str>) -> Result<Backend, String> {
+    match value.ok_or_else(|| "--backend requires a value".to_owned())? {
+        "peer" | "peer-backed" => Ok(Backend::Peer),
+        other => Err(format!("unknown play-bot backend: {other}")),
+    }
 }
 
 fn parse_hands(args: &[String], index: usize) -> Result<u64, String> {
@@ -194,13 +256,14 @@ fn parse_seat(value: Option<&str>) -> Result<Seat, String> {
 
 fn print_play_bot_help() {
     println!(
-        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only]"
+        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer]"
     );
     println!("presets: nit, balanced, loose-passive, lag, maniac");
     println!("human seat defaults to seat0 and runs until quit; use --hands N to bound it");
     println!("--bots-only runs one hand by default; combine with --hands N for more");
     println!("human seats: 0, 1, ... or seat0, seat1, ...");
     println!("human actions: fold, check, call, bet N, raise N, quit");
+    println!("backends: peer");
     println!("board updates are printed as flop, turn, and river when cards open");
 }
 
@@ -215,14 +278,20 @@ fn run_session(
         None
     });
     let mut outcome = SessionOutcome::default();
+    let mut table = TableState::new(options.players);
+    outcome.final_stacks.clone_from(&table.stacks);
     loop {
         if hand_limit.is_some_and(|limit| outcome.completed_hands >= limit) {
+            return Ok(outcome);
+        }
+        if !table.can_continue() {
             return Ok(outcome);
         }
         let hand_number = HandNumber::from_u64(outcome.completed_hands);
         writeln!(output, "=== hand {} ===", hand_number.to_u64())
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-        match run_hand(options, hand_number, input, output)? {
+        write_table_state(options.backend, &table, output)?;
+        match run_hand(options, hand_number, &table, input, output)? {
             HandOutcome::Finished(result) => {
                 outcome.completed_hands += 1;
                 writeln!(
@@ -242,6 +311,8 @@ fn run_session(
                 }
                 writeln!(output)
                     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+                table.advance(result.finished.final_stacks());
+                outcome.final_stacks.clone_from(&table.stacks);
             }
             HandOutcome::Quit => {
                 outcome.quit = true;
@@ -251,9 +322,30 @@ fn run_session(
     }
 }
 
+fn write_table_state(
+    backend: Backend,
+    table: &TableState,
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    write!(output, "starting stacks:")
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    for (index, stack) in table.stacks.iter().enumerate() {
+        write!(output, " seat{index}={}", stack.units())
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    }
+    writeln!(
+        output,
+        " button={} backend={}",
+        table.button,
+        backend.name()
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
 fn run_hand(
     options: Options,
     hand_number: HandNumber,
+    table: &TableState,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> mtholdem::Result<HandOutcome> {
@@ -262,12 +354,17 @@ fn run_hand(
         .map(|_| IdentitySecret::generate(&mut crypto_rng))
         .collect();
     let roster = Roster::new(identities.iter().map(IdentitySecret::public).collect())?;
-    let buy_in = Chips::from_units(100);
-    let maximum_hand_loss = Chips::from_units(101);
+    let buy_in = table.maximum_stack();
+    let maximum_hand_loss = buy_in;
     let opponents = u64::try_from(roster.len() - 1).expect("roster length is limited to ten seats");
-    let security_deposit = Chips::from_units(maximum_hand_loss.units() * opponents);
-    let economics =
-        EconomicSecurity::new(roster.len(), buy_in, maximum_hand_loss, security_deposit)?;
+    let compensation = Chips::from_units(maximum_hand_loss.units() + 1);
+    let security_deposit = Chips::from_units(compensation.units() * opponents);
+    let economics = EconomicSecurity::new(
+        roster.len(),
+        maximum_hand_loss,
+        compensation,
+        security_deposit,
+    )?;
     let config = SessionConfig::builder(
         SessionId::random(&mut crypto_rng),
         roster,
@@ -277,15 +374,21 @@ fn run_hand(
     )
     .economics(economics)
     .build()?;
+    let active_seats = (0..options.players)
+        .map(|index| Seat::new(index).expect("player index was range-checked"))
+        .collect::<Vec<_>>();
+    let deal_plan = DealPlan::new(options.players, table.button, &active_seats)?;
     let sessions = identities
         .iter()
         .enumerate()
         .map(|(index, identity)| {
-            PeerSession::new(
+            PeerSession::with_starting_stacks_and_deal_plan(
                 config.clone(),
                 IdentitySecret::from_seed(identity.to_seed().expose()),
                 Seat::new(index).expect("player index was range-checked"),
                 hand_number,
+                table.stacks.clone(),
+                deal_plan.clone(),
             )
         })
         .collect::<mtholdem::Result<Vec<_>>>()?;
@@ -709,6 +812,16 @@ fn is_open_bet(street: Street, legal: LegalActions) -> bool {
     street != Street::Preflop && legal.to_call().is_zero()
 }
 
+fn next_button(current: Seat, stacks: &[Chips]) -> Seat {
+    for offset in 1..=stacks.len() {
+        let index = (current.index() + offset) % stacks.len();
+        if !stacks[index].is_zero() {
+            return Seat::new(index).expect("stack index fits in a seat");
+        }
+    }
+    current
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,8 +836,10 @@ mod tests {
                     preset: BotPreset::Balanced,
                     human: None,
                     hands: None,
+                    backend: Backend::Peer,
                 },
                 HandNumber::FIRST,
+                &TableState::new(2),
                 &mut io::empty(),
                 &mut io::sink(),
             )
@@ -754,8 +869,10 @@ mod tests {
                     preset: BotPreset::Balanced,
                     human: Some(Seat::new(0).expect("seat")),
                     hands: None,
+                    backend: Backend::Peer,
                 },
                 HandNumber::FIRST,
+                &TableState::new(2),
                 &mut input,
                 &mut output,
             )
@@ -786,6 +903,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(1),
+                backend: Backend::Peer,
             },
             &mut input,
             &mut output,
@@ -809,6 +927,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(1),
+                backend: Backend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -832,8 +951,10 @@ mod tests {
                     preset: BotPreset::Nit,
                     human: None,
                     hands: None,
+                    backend: Backend::Peer,
                 },
                 HandNumber::FIRST,
+                &TableState::new(4),
                 &mut io::empty(),
                 &mut io::sink(),
             )
@@ -862,6 +983,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(2),
+                backend: Backend::Peer,
             },
             &mut input,
             &mut output,
@@ -883,6 +1005,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: None,
+                backend: Backend::Peer,
             },
             &mut input,
             &mut output,
@@ -903,6 +1026,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: None,
+                backend: Backend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -923,6 +1047,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(2),
+                backend: Backend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -931,6 +1056,50 @@ mod tests {
 
         assert_eq!(outcome.completed_hands, 2);
         assert!(!outcome.quit);
+    }
+
+    #[test]
+    fn peer_backend_carries_final_stacks_to_next_hand() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 3,
+                seed: 77,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(2),
+                backend: Backend::Peer,
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("two peer-backed hands finish");
+
+        assert_eq!(outcome.completed_hands, 2);
+        let output = String::from_utf8(output).expect("utf8");
+        let starting_stacks = output
+            .lines()
+            .filter_map(|line| line.strip_prefix("starting stacks: "))
+            .collect::<Vec<_>>();
+        let final_stacks = output
+            .lines()
+            .filter_map(|line| line.strip_prefix("final stacks: "))
+            .collect::<Vec<_>>();
+        assert_eq!(starting_stacks.len(), 2);
+        assert_eq!(final_stacks.len(), 2);
+        let second_start = starting_stacks[1]
+            .split(" button=")
+            .next()
+            .expect("starting stack line has stack segment");
+        assert_eq!(second_start, final_stacks[0]);
+        assert_eq!(
+            outcome
+                .final_stacks
+                .iter()
+                .map(|stack| stack.units())
+                .sum::<u64>(),
+            300
+        );
     }
 
     #[test]

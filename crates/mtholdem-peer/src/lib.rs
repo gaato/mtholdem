@@ -244,6 +244,7 @@ pub struct PeerSession {
     local_identity: IdentitySecret,
     local_seat: Seat,
     hand: HandNumber,
+    starting_stacks: Vec<Chips>,
     deal_plan: DealPlan,
     cryptography: HandCryptography,
     transcript: PublicTranscript,
@@ -276,6 +277,23 @@ impl PeerSession {
         local_seat: Seat,
         hand: HandNumber,
     ) -> Result<Self> {
+        let starting_stacks = vec![config.buy_in(); config.roster().len()];
+        Self::with_starting_stacks(config, local_identity, local_seat, hand, starting_stacks)
+    }
+
+    /// Creates local peer state for one hand with explicit starting stacks.
+    ///
+    /// Hosts that carry table state across hands must pass the exact stack vector
+    /// agreed for this hand. In real multiplayer this value must be derived from the
+    /// previous certified hand result or another consensus source; local practice
+    /// shells may choose it directly.
+    pub fn with_starting_stacks(
+        config: SessionConfig,
+        local_identity: IdentitySecret,
+        local_seat: Seat,
+        hand: HandNumber,
+        starting_stacks: Vec<Chips>,
+    ) -> Result<Self> {
         let active_seats = (0..config.roster().len())
             .map(|index| Seat::new(index).expect("roster index fits in a seat"))
             .collect::<Vec<_>>();
@@ -284,7 +302,14 @@ impl PeerSession {
             Seat::new(0).expect("zero is a valid seat"),
             &active_seats,
         )?;
-        Self::with_deal_plan(config, local_identity, local_seat, hand, deal_plan)
+        Self::with_starting_stacks_and_deal_plan(
+            config,
+            local_identity,
+            local_seat,
+            hand,
+            starting_stacks,
+            deal_plan,
+        )
     }
 
     /// Creates local peer state for one hand with an explicit public deal plan.
@@ -295,12 +320,37 @@ impl PeerSession {
         hand: HandNumber,
         deal_plan: DealPlan,
     ) -> Result<Self> {
+        let starting_stacks = vec![config.buy_in(); config.roster().len()];
+        Self::with_starting_stacks_and_deal_plan(
+            config,
+            local_identity,
+            local_seat,
+            hand,
+            starting_stacks,
+            deal_plan,
+        )
+    }
+
+    /// Creates local peer state for one hand with explicit stacks and deal plan.
+    ///
+    /// The stack vector is caller-supplied table state. All peers for the same hand
+    /// must use the same values or their deterministic betting and payout state will
+    /// diverge.
+    pub fn with_starting_stacks_and_deal_plan(
+        config: SessionConfig,
+        local_identity: IdentitySecret,
+        local_seat: Seat,
+        hand: HandNumber,
+        starting_stacks: Vec<Chips>,
+        deal_plan: DealPlan,
+    ) -> Result<Self> {
         let expected = config.roster().participant(local_seat)?.player_id();
         if local_identity.public().player_id() != expected {
             return Err(protocol(format!(
                 "local identity does not belong to declared {local_seat}"
             )));
         }
+        Self::validate_starting_stacks(&config, &starting_stacks)?;
         Self::validate_deal_plan(&config, &deal_plan)?;
         let roster_len = config.roster().len();
         Ok(Self {
@@ -310,6 +360,7 @@ impl PeerSession {
             local_identity,
             local_seat,
             hand,
+            starting_stacks,
             deal_plan,
             local_key_share: None,
             registered_keys: 0,
@@ -940,9 +991,8 @@ impl PeerSession {
         if self.holdem.is_some() {
             return Ok(());
         }
-        let stacks = vec![self.config.buy_in(); self.config.roster().len()];
         let hand = HoldemHand::new(
-            &stacks,
+            &self.starting_stacks,
             self.deal_plan.button(),
             self.config.small_blind(),
             self.config.big_blind(),
@@ -1548,6 +1598,24 @@ impl PeerSession {
             if deal_plan.hole_cards(seat).is_none() {
                 return Err(protocol("deal plan omits a roster seat"));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_starting_stacks(config: &SessionConfig, starting_stacks: &[Chips]) -> Result<()> {
+        if starting_stacks.len() != config.roster().len() {
+            return Err(protocol("starting stack count does not match roster"));
+        }
+        if starting_stacks
+            .iter()
+            .copied()
+            .filter(|stack| !stack.is_zero())
+            .count()
+            < 2
+        {
+            return Err(protocol(
+                "at least two non-zero starting stacks are required",
+            ));
         }
         Ok(())
     }
