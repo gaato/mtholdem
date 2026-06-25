@@ -5,6 +5,7 @@ use std::io::{self, BufRead, Write};
 
 use mental_card_core::identity::IdentitySecret;
 use mtholdem::betting::{BetAction, LegalActions, Street};
+use mtholdem::card::evaluate_best;
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::deal::DealPlan;
 use mtholdem::holdem::{HandProgress, HoldemHand};
@@ -60,6 +61,7 @@ enum HandOutcome {
 #[derive(Debug)]
 struct HandResult {
     finished: FinishedHand,
+    board: Vec<Card>,
     showdown_hands: Vec<Option<[Card; 2]>>,
 }
 
@@ -308,7 +310,7 @@ fn run_session(
                     options.preset
                 )
                 .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-                write_showdown_summary(&result.showdown_hands, output)?;
+                write_showdown_summary(&result.board, &result.showdown_hands, output)?;
                 write!(output, "final stacks:")
                     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
                 for (index, stack) in result.finished.final_stacks().iter().enumerate() {
@@ -499,6 +501,7 @@ fn run_rules_only_hand(
                 let final_stacks = hand.settle_showdown(&opened)?.final_stacks().to_vec();
                 return Ok(HandOutcome::Finished(HandResult {
                     finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
+                    board: hand.board().to_vec(),
                     showdown_hands,
                 }));
             }
@@ -506,6 +509,7 @@ fn run_rules_only_hand(
                 let final_stacks = hand.settle_uncontested()?.final_stacks().to_vec();
                 return Ok(HandOutcome::Finished(HandResult {
                     finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
+                    board: hand.board().to_vec(),
                     showdown_hands: vec![None; options.players],
                 }));
             }
@@ -517,6 +521,7 @@ fn run_rules_only_hand(
                     .to_vec();
                 return Ok(HandOutcome::Finished(HandResult {
                     finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
+                    board: hand.board().to_vec(),
                     showdown_hands: vec![None; options.players],
                 }));
             }
@@ -591,8 +596,10 @@ impl InProcessHand {
                 mental_card_core::error::protocol("play-bot did not finish the hand")
             })?;
         let showdown_hands = collect_showdown_hands(&self.sessions);
+        let board = self.sessions.first().map_or_else(Vec::new, board_cards);
         Ok(HandOutcome::Finished(HandResult {
             finished,
+            board,
             showdown_hands,
         }))
     }
@@ -758,6 +765,7 @@ fn collect_showdown_hands(sessions: &[PeerSession]) -> Vec<Option<[Card; 2]>> {
 }
 
 fn write_showdown_summary(
+    board: &[Card],
     showdown_hands: &[Option<[Card; 2]>],
     output: &mut impl Write,
 ) -> mtholdem::Result<()> {
@@ -770,11 +778,19 @@ fn write_showdown_summary(
         .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     for (index, cards) in showdown_hands.iter().enumerate() {
         if let Some([first, second]) = cards {
-            write!(output, " seat{index}={first} {second}")
+            let category = showdown_category(board, [*first, *second])?;
+            write!(output, " seat{index}={first} {second} ({category})")
                 .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         }
     }
     writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn showdown_category(board: &[Card], hole: [Card; 2]) -> mtholdem::Result<mtholdem::HandCategory> {
+    let mut cards = Vec::with_capacity(hole.len() + board.len());
+    cards.extend_from_slice(&hole);
+    cards.extend_from_slice(board);
+    evaluate_best(&cards).map(|value| value.category())
 }
 
 fn read_human_action(
@@ -1363,6 +1379,36 @@ mod tests {
                 facing_bet,
             ),
             "preflop: seat 0 raises to 4"
+        );
+    }
+
+    #[test]
+    fn showdown_summary_labels_opened_hand_categories() {
+        let board = [
+            Card::new(Rank::Ace, Suit::Hearts),
+            Card::new(Rank::Four, Suit::Clubs),
+            Card::new(Rank::Four, Suit::Spades),
+            Card::new(Rank::Three, Suit::Hearts),
+            Card::new(Rank::Six, Suit::Diamonds),
+        ];
+        let showdown_hands = [
+            None,
+            Some([
+                Card::new(Rank::Eight, Suit::Spades),
+                Card::new(Rank::Ten, Suit::Spades),
+            ]),
+            Some([
+                Card::new(Rank::Ten, Suit::Hearts),
+                Card::new(Rank::Ace, Suit::Spades),
+            ]),
+        ];
+
+        let mut output = Vec::new();
+        write_showdown_summary(&board, &showdown_hands, &mut output).expect("showdown summary");
+
+        assert_eq!(
+            String::from_utf8(output).expect("utf8"),
+            "showdown: seat1=8s Ts (one pair) seat2=Th As (two pair)\n"
         );
     }
 
