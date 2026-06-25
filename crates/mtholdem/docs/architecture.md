@@ -178,6 +178,8 @@ The profile values model looseness, aggression, call bias, bluffing, and randomn
 crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
 use it only when answering `HostEffect::RequestAction`. The current lightweight policy should be
 replaced with an assessment, intent, and sizing pipeline before treating it as a real local opponent;
+postflop assessment may use bounded deterministic Monte Carlo equity while respecting public
+information boundaries.
 see [ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
 
 ## Future host table runner

@@ -37,6 +37,7 @@ ADR-010, but replace its internal decision pipeline:
 1. Build a `HandAssessment`.
    - Preflop hand class and rank score.
    - Made-hand category from the evaluator when enough cards exist.
+   - Bounded Monte Carlo equity on flop and turn.
    - Draw potential and overcard value.
    - Board texture and multiway pressure.
    - Showdown value, especially on the river.
@@ -59,6 +60,25 @@ ADR-010, but replace its internal decision pipeline:
 - player count and live opponent count;
 - position-like information where the table runner can provide it.
 
+Use Monte Carlo as an equity estimator inside `HandAssessment`, not as a direct
+action selector. Preflop should stay table-driven with position and player-count
+adjustments. Flop and turn may run a bounded number of deterministic trials over
+unknown cards and live opponents. River does not need Monte Carlo because the
+opened board and known hand can be evaluated directly.
+
+The estimator must be explicit about what information it uses. Peer-backed play
+may use only the bot seat's known hole cards, public board cards, public action
+context, and random unknown opponent cards. It must not inspect hidden cards
+from other seats even when an in-process local runner technically holds them.
+Rules-only play may share the same estimator for consistent behavior, but must
+follow the same information boundary unless a deliberately named debug or test
+policy says otherwise.
+
+Monte Carlo work must be bounded and deterministic for reproducible tests and
+acceptable CLI/Godot latency. Initial defaults should be small, for example a
+few hundred trials on the flop and somewhat more on the turn, with table-runner
+or profile-level tuning available later.
+
 The public bot API may break before the stable release. Do not preserve the
 old min-raise policy for compatibility. If useful for tests, keep a deliberately
 named fixture or deterministic test policy rather than presenting it as a real
@@ -78,6 +98,13 @@ opponent profile.
   to keep deterministic, inspectable, and lightweight.
 - Rejected: The goal is a plausible local opponent, not optimal play.
 
+### Use only static heuristics for postflop strength
+- Pros: Fast and easy to make deterministic.
+- Cons: Draws, overcards, multiway equity, and board runouts are difficult to
+  approximate well with hand-written rules alone.
+- Rejected: Use lightweight bounded Monte Carlo for equity estimates, then let
+  intent and sizing policy decide the action.
+
 ### Put bot intelligence into the table runner
 - Pros: Direct access to pot, stacks, button, and live seats.
 - Cons: Mixes opponent policy with host orchestration and makes bot reuse from
@@ -96,6 +123,8 @@ opponent profile.
 - The next bot implementation should be a rewrite of the policy pipeline, not
   a sequence of ad hoc min-raise suppressions.
 - The table runner must expose richer context to bot decisions.
+- Postflop assessment may spend bounded CPU time on Monte Carlo equity, so
+  profiles or runners should be able to tune trial counts later.
 - CLI and future Godot single-player can surface bot debug information such as
   assessment, intent, and sizing without depending on protocol internals.
 - Existing bot presets may keep their names, but their parameters should map to
