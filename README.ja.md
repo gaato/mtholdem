@@ -22,6 +22,7 @@ English README: [README.md](README.md)
 | [`mtholdem`](crates/mtholdem) | no-limit Texas Hold'em rules、signed wire、transcript、checkpoint、recovery evidence、settlement-facing state |
 | [`mtholdem-peer`](crates/mtholdem-peer) | transport-neutral peer-session orchestration |
 | [`mtholdem-adapter`](crates/mtholdem-adapter) | CLI/C ABI/downstream WASM package が共有する byte-oriented boundary |
+| [`mtholdem-bot`](crates/mtholdem-bot) | demo や single-player shell 用の host-side heuristic bot policy |
 | [`mtholdem-ffi`](crates/mtholdem-ffi) | opaque handle、ABI version、error code、caller-owned buffer を持つ C ABI |
 | [`mtholdem-cli`](crates/mtholdem-cli) | scriptable command-line entrypoint |
 | [`mtholdem-testkit`](crates/mtholdem-testkit) | downstream integration test 用 deterministic fixture |
@@ -92,6 +93,7 @@ cargo test --locked --workspace --all-targets --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo run --locked -p mtholdem --example simulated_hand
 cargo run --locked -p mtholdem-cli -- abi-version
+cargo run --locked -p mtholdem-cli -- play-bot --players 3 --seed 7
 ```
 
 最小の Hold'em session 設定例です。金額は integer chip unit で、浮動小数点は使用しません。

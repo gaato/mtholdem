@@ -16,6 +16,7 @@ doc = false
 mental-card-core.workspace = true
 mtholdem.workspace = true
 mtholdem-adapter.workspace = true
+mtholdem-bot.workspace = true
 mtholdem-peer.workspace = true
 rand.workspace = true
 

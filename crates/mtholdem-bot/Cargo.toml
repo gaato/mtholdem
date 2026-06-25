@@ -1,0 +1,15 @@
+[package]
+name = "mtholdem-bot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Host-side bot policy helpers for mtholdem demos"
+
+[dependencies]
+mtholdem.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

@@ -17,6 +17,9 @@ mental-card-core
           |           ^
           |           |-- mtholdem-cli
           |           `-- mtholdem-ffi
+          |-- mtholdem-bot
+          |     ^
+          |     `-- mtholdem-cli
           `-- mtholdem-testkit
 ```
 
@@ -153,12 +156,21 @@ WASM/npm packages should live outside this workspace and consume the Rust
 adapter boundary. Godot GDExtension should also live outside this workspace and
 consume the C ABI.
 
+`mtholdem-bot` is a host-side policy crate, not a protocol crate. It chooses
+legal betting actions for demos from public context, known local hole cards, and
+the rules engine's `LegalActions`. It does not drive peer sessions, interpret
+wire artifacts, validate transcripts, or expose a C ABI surface. CLI and future
+single-player shells may use it to answer `RequestAction` effects while keeping
+the peer/session loop in the host.
+
 ## Naming
 
 - `mtholdem`: the Texas Hold'em rules/protocol crate.
 - `mtholdem-peer`: transport-neutral peer-session orchestration.
 - `mtholdem-adapter`: the byte/event/action/error/status boundary shared by
   target wrappers.
+- `mtholdem-bot`: host-side heuristic action policy for demos and
+  single-player shells.
 - `mtholdem-cli`: the scriptable CLI wrapper.
 - `mtholdem-ffi`: the C ABI boundary and opaque-handle owner.
 - `mental-card-core`: the workspace's dependency core for standard-card

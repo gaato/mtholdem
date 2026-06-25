@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+mod play_bot;
+
 use std::env;
 use std::process::ExitCode;
 
@@ -24,6 +26,16 @@ fn main() -> ExitCode {
         Some("abi-version") => {
             println!("{ABI_VERSION_MAJOR}.{ABI_VERSION_MINOR}.{ABI_VERSION_PATCH}");
             ExitCode::SUCCESS
+        }
+        Some("play-bot") => {
+            let args = args.collect::<Vec<_>>();
+            match play_bot::run(&args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::from(1)
+                }
+            }
         }
         Some("smoke-peer") => match smoke_peer() {
             Ok(()) => ExitCode::SUCCESS,
@@ -50,6 +62,7 @@ fn print_help() {
     println!();
     println!("commands:");
     println!("  abi-version   print the host-boundary ABI version");
+    println!("  play-bot      run one in-process hand with heuristic bot players");
     println!("  smoke-peer    create an ephemeral peer and print queued boundary effects");
     println!("  version       print the CLI package version");
 }

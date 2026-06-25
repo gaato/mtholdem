@@ -6,7 +6,7 @@ another crate.
 
 ## Design goals
 
-The implementation separates five concerns:
+The implementation separates six concerns:
 
 1. **Game-neutral encrypted-card state:** verified roster keys, one exact encrypted deck, and reveal
    shares valid for one exact deck position and target.
@@ -18,6 +18,8 @@ The implementation separates five concerns:
    disputed Hold'em execution.
 5. **Test assembly:** predictable fixtures that compose only the public production APIs and never
    weaken verification.
+6. **Host-side demo policy:** optional bot choices that consume legal action context without
+   becoming consensus rules.
 
 All production crates are Sans-I/O. They do not open sockets, schedule timers, write databases, or
 submit transactions. Applications may use Tokio, QUIC, WebRTC, libp2p, a relay, or an in-memory
@@ -50,6 +52,12 @@ harness without changing the consensus state machines.
        │ transport-neutral orchestration   │
        └───────────────────────────────────┘
 
+                   mtholdem-bot
+       ┌───────────────────────────────────┐
+       │ heuristic legal-action policy     │
+       │ for demos and single-player hosts │
+       └───────────────────────────────────┘
+
                  mtholdem-testkit
        ┌───────────────────────────────────┐
        │ seeded public-API fixtures        │
@@ -57,7 +65,7 @@ harness without changing the consensus state machines.
 ```
 
 The arrows are compile-time dependencies. `mental-card-core` has no dependency on a game crate;
-`mtholdem` has no dependency on peer drivers or the testkit.
+`mtholdem` has no dependency on peer drivers, bot policy, or the testkit.
 
 ## `mental-card-core`
 
@@ -154,6 +162,13 @@ timeout is a mediator-observed fact, not a self-contained cryptographic proof.
 `TestTable` creates deterministic identities and configuration, then executes genuine key proofs and
 all genuine shuffles through public APIs. It offers no fake proof or unchecked constructor. The
 seeded RNG is deliberately predictable and therefore suitable only for tests.
+
+## `mtholdem-bot`
+
+`HeuristicBot` converts a `BotDecisionContext` and a host-provided RNG into one legal `BetAction`.
+The profile values model looseness, aggression, call bias, bluffing, and randomness for demos. The
+crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
+use it only when answering `HostEffect::RequestAction`.
 
 ## `mtholdem-peer`
 
