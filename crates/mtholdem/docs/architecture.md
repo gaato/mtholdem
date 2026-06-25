@@ -6,7 +6,7 @@ another crate.
 
 ## Design goals
 
-The implementation separates six concerns:
+The implementation separates seven concerns:
 
 1. **Game-neutral encrypted-card state:** verified roster keys, one exact encrypted deck, and reveal
    shares valid for one exact deck position and target.
@@ -20,6 +20,8 @@ The implementation separates six concerns:
    weaken verification.
 6. **Host-side demo policy:** optional bot choices that consume legal action context without
    becoming consensus rules.
+7. **Host-side table running:** optional multi-hand orchestration that turns peer effects into
+   table events without becoming peer-session or UI code.
 
 All production crates are Sans-I/O. They do not open sockets, schedule timers, write databases, or
 submit transactions. Applications may use Tokio, QUIC, WebRTC, libp2p, a relay, or an in-memory
@@ -56,6 +58,12 @@ harness without changing the consensus state machines.
        ┌───────────────────────────────────┐
        │ heuristic legal-action policy     │
        │ for demos and single-player hosts │
+       └───────────────────────────────────┘
+
+             future mtholdem-table/host
+       ┌───────────────────────────────────┐
+       │ optional multi-hand table runner  │
+       │ and host-facing event surface     │
        └───────────────────────────────────┘
 
                  mtholdem-testkit
@@ -169,6 +177,16 @@ seeded RNG is deliberately predictable and therefore suitable only for tests.
 The profile values model looseness, aggression, call bias, bluffing, and randomness for demos. The
 crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
 use it only when answering `HostEffect::RequestAction`.
+
+## Future host table runner
+
+Multi-hand table orchestration stays above `mtholdem-peer` and `mtholdem-bot`. A shared runner may
+later carry final stacks into the next hand, rotate the button, remove busted seats, dispatch bot
+actions, and emit table-oriented events for CLI, Godot, WASM, or C ABI consumers. It should be
+extracted only after the CLI runner and at least one downstream host need the same behavior.
+Peer-backed execution is the reference path because it exercises P2P artifacts; a future rules-only
+backend may reuse the same table events for lightweight local play. See
+[ADR-011](../../../docs/decisions/ADR-011-keep-table-session-runner-host-side.md).
 
 ## `mtholdem-peer`
 

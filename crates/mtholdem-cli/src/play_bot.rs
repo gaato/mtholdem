@@ -1,9 +1,10 @@
-//! In-process one-hand bot demo for the CLI.
+//! In-process human-vs-bot play mode for the CLI.
 
 use std::collections::VecDeque;
+use std::io::{self, BufRead, Write};
 
 use mental_card_core::identity::IdentitySecret;
-use mtholdem::betting::{BetAction, Street};
+use mtholdem::betting::{BetAction, LegalActions, Street};
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::{Card, Chips, HandNumber, Seat, SessionId};
 use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
@@ -20,6 +21,32 @@ struct Options {
     players: usize,
     seed: u64,
     preset: BotPreset,
+    human: Option<Seat>,
+    hands: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HumanInput {
+    Action(BetAction),
+    Quit,
+}
+
+#[derive(Debug)]
+enum HandOutcome {
+    Finished(HandResult),
+    Quit,
+}
+
+#[derive(Debug)]
+struct HandResult {
+    finished: FinishedHand,
+    showdown_hands: Vec<Option<[Card; 2]>>,
+}
+
+#[derive(Debug, Default)]
+struct SessionOutcome {
+    completed_hands: u64,
+    quit: bool,
 }
 
 #[derive(Debug)]
@@ -42,30 +69,37 @@ struct InProcessHand {
     sessions: Vec<PeerSession>,
     queue: VecDeque<QueuedEffect>,
     finished: Vec<FinishedHand>,
+    printed_board_len: usize,
     bot: HeuristicBot,
     bot_rng: StdRng,
     crypto_rng: OsRng,
 }
 
-/// Runs one complete in-process hand driven by heuristic bot players.
+/// Runs one or more in-process hands driven by a human and heuristic bot players.
 pub(crate) fn run(args: &[String]) -> Result<(), String> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_play_bot_help();
         return Ok(());
     }
     let options = parse_options(args)?;
-    let result = run_hand(options).map_err(|error| error.to_string())?;
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    let outcome =
+        run_session(options, &mut input, &mut output).map_err(|error| error.to_string())?;
     println!(
-        "finished hand {} with {} players using {:?}",
-        result.hand().to_u64(),
-        options.players,
-        options.preset
+        "session ended after {} completed hand{}",
+        outcome.completed_hands,
+        if outcome.completed_hands == 1 {
+            ""
+        } else {
+            "s"
+        }
     );
-    print!("final stacks:");
-    for (index, stack) in result.final_stacks().iter().enumerate() {
-        print!(" seat{index}={}", stack.units());
+    if outcome.quit {
+        println!("quit requested");
     }
-    println!();
     Ok(())
 }
 
@@ -74,6 +108,8 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         players: DEFAULT_PLAYERS,
         seed: DEFAULT_SEED,
         preset: BotPreset::Balanced,
+        human: Some(Seat::new(0).expect("seat zero is valid")),
+        hands: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -90,6 +126,17 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 index += 1;
                 options.preset = parse_preset(args.get(index).map(String::as_str))?;
             }
+            "--human" => {
+                index += 1;
+                options.human = Some(parse_seat(args.get(index).map(String::as_str))?);
+            }
+            "--bots-only" => {
+                options.human = None;
+            }
+            "--hands" => {
+                index += 1;
+                options.hands = Some(parse_hands(args, index)?);
+            }
             other => return Err(format!("unknown play-bot option: {other}")),
         }
         index += 1;
@@ -97,7 +144,20 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     if !(2..=10).contains(&options.players) {
         return Err("--players must be in 2..=10".to_owned());
     }
+    if let Some(human) = options.human {
+        if human.index() >= options.players {
+            return Err("--human seat must be lower than --players".to_owned());
+        }
+    }
     Ok(options)
+}
+
+fn parse_hands(args: &[String], index: usize) -> Result<u64, String> {
+    let hands = parse_value(args, index, "--hands")?;
+    if hands == 0 {
+        return Err("--hands must be at least 1".to_owned());
+    }
+    Ok(hands)
 }
 
 fn parse_value<T: std::str::FromStr>(
@@ -122,29 +182,98 @@ fn parse_preset(value: Option<&str>) -> Result<BotPreset, String> {
     }
 }
 
-fn print_play_bot_help() {
-    println!("usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET]");
-    println!("presets: nit, balanced, loose-passive, lag, maniac");
+fn parse_seat(value: Option<&str>) -> Result<Seat, String> {
+    let raw = value.ok_or_else(|| "--human requires a value".to_owned())?;
+    let index = raw
+        .strip_prefix("seat")
+        .unwrap_or(raw)
+        .parse()
+        .map_err(|_| "--human must be a seat index such as 0 or seat0".to_owned())?;
+    Seat::new(index).map_err(|error| error.to_string())
 }
 
-fn run_hand(options: Options) -> mtholdem::Result<FinishedHand> {
+fn print_play_bot_help() {
+    println!(
+        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only]"
+    );
+    println!("presets: nit, balanced, loose-passive, lag, maniac");
+    println!("human seat defaults to seat0 and runs until quit; use --hands N to bound it");
+    println!("--bots-only runs one hand by default; combine with --hands N for more");
+    println!("human seats: 0, 1, ... or seat0, seat1, ...");
+    println!("human actions: fold, check, call, bet N, raise N, quit");
+    println!("board updates are printed as flop, turn, and river when cards open");
+}
+
+fn run_session(
+    options: Options,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> mtholdem::Result<SessionOutcome> {
+    let hand_limit = options.hands.or(if options.human.is_none() {
+        Some(1)
+    } else {
+        None
+    });
+    let mut outcome = SessionOutcome::default();
+    loop {
+        if hand_limit.is_some_and(|limit| outcome.completed_hands >= limit) {
+            return Ok(outcome);
+        }
+        let hand_number = HandNumber::from_u64(outcome.completed_hands);
+        writeln!(output, "=== hand {} ===", hand_number.to_u64())
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        match run_hand(options, hand_number, input, output)? {
+            HandOutcome::Finished(result) => {
+                outcome.completed_hands += 1;
+                writeln!(
+                    output,
+                    "finished hand {} with {} players using {:?} bots",
+                    result.finished.hand().to_u64(),
+                    options.players,
+                    options.preset
+                )
+                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+                write_showdown_summary(&result.showdown_hands, output)?;
+                write!(output, "final stacks:")
+                    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+                for (index, stack) in result.finished.final_stacks().iter().enumerate() {
+                    write!(output, " seat{index}={}", stack.units())
+                        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+                }
+                writeln!(output)
+                    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+            }
+            HandOutcome::Quit => {
+                outcome.quit = true;
+                return Ok(outcome);
+            }
+        }
+    }
+}
+
+fn run_hand(
+    options: Options,
+    hand_number: HandNumber,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> mtholdem::Result<HandOutcome> {
     let mut crypto_rng = OsRng;
     let identities: Vec<_> = (0..options.players)
         .map(|_| IdentitySecret::generate(&mut crypto_rng))
         .collect();
     let roster = Roster::new(identities.iter().map(IdentitySecret::public).collect())?;
-    let economics = EconomicSecurity::new(
-        roster.len(),
-        Chips::from_units(100),
-        Chips::from_units(101),
-        Chips::from_units(202),
-    )?;
+    let buy_in = Chips::from_units(100);
+    let maximum_hand_loss = Chips::from_units(101);
+    let opponents = u64::try_from(roster.len() - 1).expect("roster length is limited to ten seats");
+    let security_deposit = Chips::from_units(maximum_hand_loss.units() * opponents);
+    let economics =
+        EconomicSecurity::new(roster.len(), buy_in, maximum_hand_loss, security_deposit)?;
     let config = SessionConfig::builder(
         SessionId::random(&mut crypto_rng),
         roster,
         Chips::from_units(1),
         Chips::from_units(2),
-        Chips::from_units(100),
+        buy_in,
     )
     .economics(economics)
     .build()?;
@@ -156,7 +285,7 @@ fn run_hand(options: Options) -> mtholdem::Result<FinishedHand> {
                 config.clone(),
                 IdentitySecret::from_seed(identity.to_seed().expose()),
                 Seat::new(index).expect("player index was range-checked"),
-                HandNumber::FIRST,
+                hand_number,
             )
         })
         .collect::<mtholdem::Result<Vec<_>>>()?;
@@ -165,17 +294,25 @@ fn run_hand(options: Options) -> mtholdem::Result<FinishedHand> {
         sessions,
         queue: VecDeque::new(),
         finished: Vec::new(),
+        printed_board_len: 0,
         bot: HeuristicBot::from_preset(options.preset),
         bot_rng: StdRng::seed_from_u64(options.seed),
         crypto_rng,
     }
-    .run()
+    .run(options.human, input, output)
 }
 
 impl InProcessHand {
-    fn run(mut self) -> mtholdem::Result<FinishedHand> {
+    fn run(
+        mut self,
+        human: Option<Seat>,
+        input: &mut impl BufRead,
+        output: &mut impl Write,
+    ) -> mtholdem::Result<HandOutcome> {
         for index in 0..self.sessions.len() {
-            self.progress_and_handle(index)?;
+            if self.progress_and_handle(index, human, input, output)? {
+                return Ok(HandOutcome::Quit);
+            }
         }
 
         let mut steps = 0;
@@ -196,13 +333,17 @@ impl InProcessHand {
                             continue;
                         }
                         self.sessions[index].apply_public_bytes(&bytes, &mut self.crypto_rng)?;
-                        self.progress_and_handle(index)?;
+                        if self.progress_and_handle(index, human, input, output)? {
+                            return Ok(HandOutcome::Quit);
+                        }
                     }
                 }
                 QueuedEffect::Private { recipient, bytes } => {
                     let index = recipient.index();
                     self.sessions[index].apply_private_bytes(&bytes)?;
-                    self.progress_and_handle(index)?;
+                    if self.progress_and_handle(index, human, input, output)? {
+                        return Ok(HandOutcome::Quit);
+                    }
                 }
                 QueuedEffect::Showdown { owner, bundle } => {
                     for index in 0..self.sessions.len() {
@@ -210,32 +351,55 @@ impl InProcessHand {
                             continue;
                         }
                         self.sessions[index].apply_showdown_bundle((*bundle).clone())?;
-                        self.progress_and_handle(index)?;
+                        if self.progress_and_handle(index, human, input, output)? {
+                            return Ok(HandOutcome::Quit);
+                        }
                     }
                 }
             }
         }
 
-        self.finished
-            .into_iter()
-            .next()
-            .ok_or_else(|| mental_card_core::error::protocol("play-bot did not finish the hand"))
+        let finished =
+            self.finished.into_iter().next().ok_or_else(|| {
+                mental_card_core::error::protocol("play-bot did not finish the hand")
+            })?;
+        let showdown_hands = collect_showdown_hands(&self.sessions);
+        Ok(HandOutcome::Finished(HandResult {
+            finished,
+            showdown_hands,
+        }))
     }
 
-    fn progress_and_handle(&mut self, index: usize) -> mtholdem::Result<()> {
+    fn progress_and_handle(
+        &mut self,
+        index: usize,
+        human: Option<Seat>,
+        input: &mut impl BufRead,
+        output: &mut impl Write,
+    ) -> mtholdem::Result<bool> {
         self.sessions[index].progress(&mut self.crypto_rng)?;
+        self.write_board_updates(output)?;
         loop {
             let effects = self.sessions[index].drain_effects();
             if effects.is_empty() {
-                return Ok(());
+                return Ok(false);
             }
             for effect in effects {
-                self.handle_effect(index, effect)?;
+                if self.handle_effect(index, effect, human, input, output)? {
+                    return Ok(true);
+                }
             }
         }
     }
 
-    fn handle_effect(&mut self, sender_index: usize, effect: HostEffect) -> mtholdem::Result<()> {
+    fn handle_effect(
+        &mut self,
+        sender_index: usize,
+        effect: HostEffect,
+        human: Option<Seat>,
+        input: &mut impl BufRead,
+        output: &mut impl Write,
+    ) -> mtholdem::Result<bool> {
         match effect {
             HostEffect::BroadcastPublic(message) => self.queue.push_back(QueuedEffect::Public {
                 sender_index,
@@ -256,10 +420,18 @@ impl InProcessHand {
                     BotDecisionContext::new(self.sessions.len(), actor, street, legal_actions)
                         .with_hole_cards(self.sessions[sender_index].local_hole_cards())
                         .with_board(board_cards(&self.sessions[sender_index]));
-                let action = self.bot.choose_action(&context, &mut self.bot_rng);
-                print_action(actor, street, action);
+                let action = if human == Some(actor) {
+                    read_human_action(&context, input, output)?
+                } else {
+                    HumanInput::Action(self.bot.choose_action(&context, &mut self.bot_rng))
+                };
+                let HumanInput::Action(action) = action else {
+                    return Ok(true);
+                };
+                print_action(actor, street, action, legal_actions);
                 self.sessions[sender_index].submit_action(action)?;
                 self.sessions[sender_index].progress(&mut self.crypto_rng)?;
+                self.write_board_updates(output)?;
             }
             HostEffect::PublishShowdownBundle { owner, bundle } => {
                 self.queue.push_back(QueuedEffect::Showdown {
@@ -275,7 +447,23 @@ impl InProcessHand {
                 ));
             }
         }
-        Ok(())
+        Ok(false)
+    }
+
+    fn write_board_updates(&mut self, output: &mut impl Write) -> mtholdem::Result<()> {
+        let board = board_cards(&self.sessions[0]);
+        if board.len() <= self.printed_board_len || !matches!(board.len(), 3..=5) {
+            return Ok(());
+        }
+        self.printed_board_len = board.len();
+        let label = match board.len() {
+            3 => "flop",
+            4 => "turn",
+            5 => "river",
+            _ => unreachable!("board updates are filtered to complete public streets"),
+        };
+        writeln!(output, "{label}: {}", format_cards(&board))
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))
     }
 }
 
@@ -291,14 +479,234 @@ fn board_cards(session: &PeerSession) -> Vec<Card> {
     session.board().iter().map(|card| card.card()).collect()
 }
 
-fn print_action(actor: Seat, street: Street, action: BetAction) {
-    match action {
-        BetAction::Fold => println!("{street}: {actor} folds"),
-        BetAction::Check => println!("{street}: {actor} checks"),
-        BetAction::Call => println!("{street}: {actor} calls"),
-        BetAction::RaiseTo(amount) => println!("{street}: {actor} raises to {}", amount.units()),
-        BetAction::AllIn => println!("{street}: {actor} moves all-in"),
+fn collect_showdown_hands(sessions: &[PeerSession]) -> Vec<Option<[Card; 2]>> {
+    let Some(observer) = sessions.first() else {
+        return Vec::new();
+    };
+    (0..sessions.len())
+        .map(|index| observer.showdown_hand(Seat::new(index).expect("session count fits seats")))
+        .collect()
+}
+
+fn write_showdown_summary(
+    showdown_hands: &[Option<[Card; 2]>],
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    if showdown_hands.iter().all(Option::is_none) {
+        writeln!(output, "showdown: none")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        return Ok(());
     }
+    write!(output, "showdown:")
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    for (index, cards) in showdown_hands.iter().enumerate() {
+        if let Some([first, second]) = cards {
+            write!(output, " seat{index}={first} {second}")
+                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        }
+    }
+    writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn read_human_action(
+    context: &BotDecisionContext,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> mtholdem::Result<HumanInput> {
+    loop {
+        write_human_prompt(context, output)?;
+        let mut line = String::new();
+        if input
+            .read_line(&mut line)
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?
+            == 0
+        {
+            return Err(mental_card_core::error::protocol(
+                "human input ended before an action was entered",
+            ));
+        }
+        match parse_human_action(line.trim(), context.legal_actions) {
+            Ok(action) => return Ok(action),
+            Err(error) => {
+                writeln!(output, "invalid action: {error}")
+                    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+            }
+        }
+    }
+}
+
+fn write_human_prompt(
+    context: &BotDecisionContext,
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(output, "{}: {} to act", context.street, context.actor)
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    if let Some([first, second]) = context.hole_cards {
+        writeln!(output, "hand: {first} {second}")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    } else {
+        writeln!(output, "hand: unknown")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    }
+    writeln!(output, "board: {}", format_cards(&context.board))
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "to call: {}",
+        context.legal_actions.to_call().units()
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    if let Some(minimum) = context.legal_actions.minimum_raise_to() {
+        let range_label = if is_open_bet(context.street, context.legal_actions) {
+            "bet range"
+        } else {
+            "raise range"
+        };
+        writeln!(
+            output,
+            "{range_label}: {}..={}",
+            minimum.units(),
+            context.legal_actions.maximum_raise_to().units()
+        )
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    } else {
+        writeln!(output, "raise range: none")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    }
+    writeln!(
+        output,
+        "actions: {}",
+        format_action_help(context.street, context.legal_actions)
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    write!(output, "> ").map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    output
+        .flush()
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn parse_human_action(input: &str, legal: LegalActions) -> Result<HumanInput, String> {
+    let mut parts = input.split_whitespace();
+    let command = parts
+        .next()
+        .ok_or_else(|| "enter fold, check, call, bet N, raise N, or quit".to_owned())?
+        .to_ascii_lowercase();
+    let action = match command.as_str() {
+        "q" | "quit" => HumanInput::Quit,
+        "f" | "fold" => {
+            if legal.can_check() {
+                return Err("fold is not offered when check is legal".to_owned());
+            }
+            HumanInput::Action(BetAction::Fold)
+        }
+        "x" | "check" => {
+            if !legal.can_check() {
+                return Err(format!(
+                    "check is not legal; call {}",
+                    legal.to_call().units()
+                ));
+            }
+            HumanInput::Action(BetAction::Check)
+        }
+        "c" | "call" => {
+            if legal.can_check() {
+                return Err("call is not legal when check is available".to_owned());
+            }
+            HumanInput::Action(BetAction::Call)
+        }
+        "b" | "bet" | "r" | "raise" => {
+            let amount = parts
+                .next()
+                .ok_or_else(|| "bet/raise requires an amount".to_owned())?
+                .parse()
+                .map_err(|_| "bet/raise amount must be an integer chip value".to_owned())?;
+            validate_raise(amount, legal)?;
+            HumanInput::Action(BetAction::RaiseTo(Chips::from_units(amount)))
+        }
+        _ => {
+            return Err(
+                "unknown action; use fold, check, call, bet N, raise N, or quit".to_owned(),
+            );
+        }
+    };
+    if parts.next().is_some() {
+        return Err("unexpected trailing input".to_owned());
+    }
+    Ok(action)
+}
+
+fn validate_raise(amount: u64, legal: LegalActions) -> Result<(), String> {
+    let Some(minimum) = legal.minimum_raise_to() else {
+        return Err("bet/raise is not currently legal".to_owned());
+    };
+    if amount < minimum.units() {
+        return Err(format!("bet/raise must be at least {}", minimum.units()));
+    }
+    if amount > legal.maximum_raise_to().units() {
+        return Err(format!(
+            "bet/raise must be at most {}",
+            legal.maximum_raise_to().units()
+        ));
+    }
+    Ok(())
+}
+
+fn format_action_help(street: Street, legal: LegalActions) -> String {
+    let mut actions = Vec::new();
+    if legal.can_check() {
+        actions.push("check".to_owned());
+    } else {
+        actions.push("fold".to_owned());
+        actions.push("call".to_owned());
+    }
+    if let Some(minimum) = legal.minimum_raise_to() {
+        let verb = if is_open_bet(street, legal) {
+            "bet"
+        } else {
+            "raise"
+        };
+        actions.push(format!(
+            "{verb} N ({}..={})",
+            minimum.units(),
+            legal.maximum_raise_to().units()
+        ));
+    }
+    actions.push("quit".to_owned());
+    actions.join(", ")
+}
+
+fn format_cards(cards: &[Card]) -> String {
+    if cards.is_empty() {
+        "-".to_owned()
+    } else {
+        cards
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn print_action(actor: Seat, street: Street, action: BetAction, legal: LegalActions) {
+    println!("{}", format_action(actor, street, action, legal));
+}
+
+fn format_action(actor: Seat, street: Street, action: BetAction, legal: LegalActions) -> String {
+    match action {
+        BetAction::Fold => format!("{street}: {actor} folds"),
+        BetAction::Check => format!("{street}: {actor} checks"),
+        BetAction::Call => format!("{street}: {actor} calls"),
+        BetAction::RaiseTo(amount) if is_open_bet(street, legal) => {
+            format!("{street}: {actor} bets {}", amount.units())
+        }
+        BetAction::RaiseTo(amount) => format!("{street}: {actor} raises to {}", amount.units()),
+        BetAction::AllIn => format!("{street}: {actor} moves all-in"),
+    }
+}
+
+fn is_open_bet(street: Street, legal: LegalActions) -> bool {
+    street != Street::Preflop && legal.to_call().is_zero()
 }
 
 #[cfg(test)]
@@ -307,12 +715,21 @@ mod tests {
 
     #[test]
     fn play_bot_finishes_one_hand_and_conserves_chips() {
-        let result = run_hand(Options {
-            players: 2,
-            seed: 11,
-            preset: BotPreset::Balanced,
-        })
-        .expect("bot hand finishes");
+        let result = finished_hand(
+            run_hand(
+                Options {
+                    players: 2,
+                    seed: 11,
+                    preset: BotPreset::Balanced,
+                    human: None,
+                    hands: None,
+                },
+                HandNumber::FIRST,
+                &mut io::empty(),
+                &mut io::sink(),
+            )
+            .expect("bot hand finishes"),
+        );
 
         assert_eq!(
             result
@@ -322,5 +739,312 @@ mod tests {
                 .sum::<u64>(),
             200
         );
+    }
+
+    #[test]
+    fn play_bot_accepts_human_actions_from_input() {
+        let script = "call\ncheck\n".repeat(20);
+        let mut input = script.as_bytes();
+        let mut output = Vec::new();
+        let result = finished_hand(
+            run_hand(
+                Options {
+                    players: 2,
+                    seed: 11,
+                    preset: BotPreset::Balanced,
+                    human: Some(Seat::new(0).expect("seat")),
+                    hands: None,
+                },
+                HandNumber::FIRST,
+                &mut input,
+                &mut output,
+            )
+            .expect("human hand finishes"),
+        );
+
+        assert_eq!(
+            result
+                .final_stacks()
+                .iter()
+                .map(|stack| stack.units())
+                .sum::<u64>(),
+            200
+        );
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("hand:"));
+        assert!(output.contains("actions:"));
+    }
+
+    #[test]
+    fn play_bot_prints_board_updates_after_human_fold() {
+        let mut input = "fold\n".as_bytes();
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 3,
+                seed: 77,
+                preset: BotPreset::Balanced,
+                human: Some(Seat::new(0).expect("seat")),
+                hands: Some(1),
+            },
+            &mut input,
+            &mut output,
+        )
+        .expect("folded human can observe hand");
+
+        assert_eq!(outcome.completed_hands, 1);
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("flop:"));
+        assert!(output.contains("turn:"));
+        assert!(output.contains("river:"));
+    }
+
+    #[test]
+    fn bots_only_prints_board_updates() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 3,
+                seed: 77,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(1),
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("bots-only hand finishes");
+
+        assert_eq!(outcome.completed_hands, 1);
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("flop:"));
+        assert!(output.contains("turn:"));
+        assert!(output.contains("river:"));
+    }
+
+    #[test]
+    fn play_bot_config_supports_larger_tables() {
+        let result = finished_hand(
+            run_hand(
+                Options {
+                    players: 4,
+                    seed: 44,
+                    preset: BotPreset::Nit,
+                    human: None,
+                    hands: None,
+                },
+                HandNumber::FIRST,
+                &mut io::empty(),
+                &mut io::sink(),
+            )
+            .expect("four-player bot hand finishes"),
+        );
+
+        assert_eq!(
+            result
+                .final_stacks()
+                .iter()
+                .map(|stack| stack.units())
+                .sum::<u64>(),
+            400
+        );
+    }
+
+    #[test]
+    fn play_bot_runs_bounded_human_sessions() {
+        let script = "call\ncheck\n".repeat(50);
+        let mut input = script.as_bytes();
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 2,
+                seed: 11,
+                preset: BotPreset::Balanced,
+                human: Some(Seat::new(0).expect("seat")),
+                hands: Some(2),
+            },
+            &mut input,
+            &mut output,
+        )
+        .expect("bounded session finishes");
+
+        assert_eq!(outcome.completed_hands, 2);
+        assert!(!outcome.quit);
+    }
+
+    #[test]
+    fn play_bot_quits_from_human_prompt() {
+        let mut input = "q\n".as_bytes();
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 2,
+                seed: 11,
+                preset: BotPreset::Balanced,
+                human: Some(Seat::new(0).expect("seat")),
+                hands: None,
+            },
+            &mut input,
+            &mut output,
+        )
+        .expect("quit exits session");
+
+        assert_eq!(outcome.completed_hands, 0);
+        assert!(outcome.quit);
+    }
+
+    #[test]
+    fn bots_only_defaults_to_one_hand() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 2,
+                seed: 11,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: None,
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("bots-only default finishes");
+
+        assert_eq!(outcome.completed_hands, 1);
+        assert!(!outcome.quit);
+    }
+
+    #[test]
+    fn bots_only_respects_hands_limit() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 2,
+                seed: 11,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(2),
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("bots-only bounded finishes");
+
+        assert_eq!(outcome.completed_hands, 2);
+        assert!(!outcome.quit);
+    }
+
+    #[test]
+    fn human_action_parser_rejects_illegal_raise_amounts() {
+        let legal = BotDecisionContext::new(
+            2,
+            Seat::new(0).expect("seat"),
+            Street::Preflop,
+            test_legal_actions(),
+        )
+        .legal_actions;
+
+        assert!(parse_human_action("raise 3", legal).is_err());
+        assert_eq!(parse_human_action("q", legal), Ok(HumanInput::Quit));
+    }
+
+    #[test]
+    fn human_action_parser_accepts_bet_alias() {
+        let legal = test_open_bet_actions();
+
+        assert_eq!(
+            parse_human_action("bet 2", legal),
+            Ok(HumanInput::Action(BetAction::RaiseTo(Chips::from_units(2))))
+        );
+        assert!(format_action_help(Street::Flop, legal).contains("bet N"));
+        assert!(
+            format_action_help(Street::Preflop, legal).contains("raise N"),
+            "preflop blind raises should not be presented as open bets"
+        );
+    }
+
+    #[test]
+    fn action_format_distinguishes_open_bets_from_raises() {
+        let actor = Seat::new(0).expect("seat");
+        let open_bet = test_open_bet_actions();
+        let facing_bet = test_legal_actions();
+
+        assert_eq!(
+            format_action(
+                actor,
+                Street::Flop,
+                BetAction::RaiseTo(Chips::from_units(2)),
+                open_bet,
+            ),
+            "flop: seat 0 bets 2"
+        );
+        assert_eq!(
+            format_action(
+                actor,
+                Street::Preflop,
+                BetAction::RaiseTo(Chips::from_units(4)),
+                facing_bet,
+            ),
+            "preflop: seat 0 raises to 4"
+        );
+    }
+
+    #[test]
+    fn play_bot_defaults_to_human_seat_zero() {
+        let options = parse_options(&[]).expect("default options");
+        assert_eq!(options.human, Some(Seat::new(0).expect("seat")));
+    }
+
+    #[test]
+    fn play_bot_can_disable_human_input() {
+        let options = parse_options(&["--bots-only".to_owned()]).expect("bots-only options");
+        assert_eq!(options.human, None);
+    }
+
+    #[test]
+    fn play_bot_rejects_zero_hands() {
+        assert!(parse_options(&["--hands".to_owned(), "0".to_owned()]).is_err());
+    }
+
+    fn finished_hand(outcome: HandOutcome) -> FinishedHand {
+        let HandOutcome::Finished(result) = outcome else {
+            panic!("expected a finished hand");
+        };
+        result.finished
+    }
+
+    fn test_legal_actions() -> LegalActions {
+        let stacks = [Chips::from_units(100), Chips::from_units(100)];
+        let hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("seat"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        hand.legal_actions().expect("legal")
+    }
+
+    fn test_open_bet_actions() -> LegalActions {
+        let stacks = [Chips::from_units(100), Chips::from_units(100)];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("seat"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        hand.apply_action(Seat::new(0).expect("seat"), BetAction::Call)
+            .expect("small blind call");
+        hand.apply_action(Seat::new(1).expect("seat"), BetAction::Check)
+            .expect("big blind check");
+        hand.open_flop([
+            Card::new(mtholdem::Rank::Two, mtholdem::Suit::Clubs),
+            Card::new(mtholdem::Rank::Seven, mtholdem::Suit::Diamonds),
+            Card::new(mtholdem::Rank::Nine, mtholdem::Suit::Hearts),
+        ])
+        .expect("open flop");
+        hand.legal_actions().expect("postflop legal")
     }
 }

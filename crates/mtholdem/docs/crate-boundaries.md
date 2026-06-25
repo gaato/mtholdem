@@ -161,7 +161,20 @@ legal betting actions for demos from public context, known local hole cards, and
 the rules engine's `LegalActions`. It does not drive peer sessions, interpret
 wire artifacts, validate transcripts, or expose a C ABI surface. CLI and future
 single-player shells may use it to answer `RequestAction` effects while keeping
-the peer/session loop in the host.
+the peer/session loop in the host. See
+[ADR-010](../../../docs/decisions/ADR-010-keep-bot-policy-host-side.md) for the
+single-player and human-input boundary.
+
+Multi-hand table/session running is also host-side orchestration. Stack
+carry-over, button rotation, busted-seat handling, human-seat prompts, bot-seat
+dispatch, and Godot-friendly table events belong above `mtholdem-peer`, not
+inside the peer driver or bot policy. The CLI may keep this runner internally
+while the behavior is experimental. If another host such as Godot needs the
+same table event model, extract a target-independent crate such as
+`mtholdem-table` or `mtholdem-host`. The peer-backed backend is the reference
+path; a future rules-only backend may use `mtholdem` plus `mtholdem-bot` for
+lightweight local play while preserving the same table events. See
+[ADR-011](../../../docs/decisions/ADR-011-keep-table-session-runner-host-side.md).
 
 ## Naming
 
@@ -171,6 +184,8 @@ the peer/session loop in the host.
   target wrappers.
 - `mtholdem-bot`: host-side heuristic action policy for demos and
   single-player shells.
+- future `mtholdem-table` or `mtholdem-host`: optional host-side multi-hand
+  table runner and event surface, if CLI/Godot/WASM need shared orchestration.
 - `mtholdem-cli`: the scriptable CLI wrapper.
 - `mtholdem-ffi`: the C ABI boundary and opaque-handle owner.
 - `mental-card-core`: the workspace's dependency core for standard-card
