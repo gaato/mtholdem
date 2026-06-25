@@ -7,11 +7,14 @@ use mental_card_core::identity::IdentitySecret;
 use mtholdem::betting::{BetAction, LegalActions, Street};
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::deal::DealPlan;
-use mtholdem::{Card, Chips, HandNumber, Seat, SessionId};
+use mtholdem::holdem::{HandProgress, HoldemHand};
+use mtholdem::transcript::TranscriptAnchor;
+use mtholdem::{Card, Chips, HandNumber, Rank, Seat, SessionId, Suit};
 use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
 use mtholdem_peer::{FinishedHand, HostEffect, PeerPhase, PeerSession};
 use rand::SeedableRng;
 use rand::rngs::{OsRng, StdRng};
+use rand::seq::SliceRandom;
 
 const DEFAULT_PLAYERS: usize = 3;
 const DEFAULT_SEED: u64 = 7;
@@ -30,12 +33,14 @@ struct Options {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Backend {
     Peer,
+    RulesOnly,
 }
 
 impl Backend {
     const fn name(self) -> &'static str {
         match self {
             Self::Peer => "peer",
+            Self::RulesOnly => "rules-only",
         }
     }
 }
@@ -210,6 +215,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
 fn parse_backend(value: Option<&str>) -> Result<Backend, String> {
     match value.ok_or_else(|| "--backend requires a value".to_owned())? {
         "peer" | "peer-backed" => Ok(Backend::Peer),
+        "rules-only" | "rules" => Ok(Backend::RulesOnly),
         other => Err(format!("unknown play-bot backend: {other}")),
     }
 }
@@ -256,14 +262,14 @@ fn parse_seat(value: Option<&str>) -> Result<Seat, String> {
 
 fn print_play_bot_help() {
     println!(
-        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer]"
+        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only]"
     );
     println!("presets: nit, balanced, loose-passive, lag, maniac");
     println!("human seat defaults to seat0 and runs until quit; use --hands N to bound it");
     println!("--bots-only runs one hand by default; combine with --hands N for more");
     println!("human seats: 0, 1, ... or seat0, seat1, ...");
     println!("human actions: fold, check, call, bet N, raise N, quit");
-    println!("backends: peer");
+    println!("backends: peer, rules-only");
     println!("board updates are printed as flop, turn, and river when cards open");
 }
 
@@ -349,6 +355,19 @@ fn run_hand(
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> mtholdem::Result<HandOutcome> {
+    match options.backend {
+        Backend::Peer => run_peer_hand(options, hand_number, table, input, output),
+        Backend::RulesOnly => run_rules_only_hand(options, hand_number, table, input, output),
+    }
+}
+
+fn run_peer_hand(
+    options: Options,
+    hand_number: HandNumber,
+    table: &TableState,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> mtholdem::Result<HandOutcome> {
     let mut crypto_rng = OsRng;
     let identities: Vec<_> = (0..options.players)
         .map(|_| IdentitySecret::generate(&mut crypto_rng))
@@ -403,6 +422,111 @@ fn run_hand(
         crypto_rng,
     }
     .run(options.human, input, output)
+}
+
+fn run_rules_only_hand(
+    options: Options,
+    hand_number: HandNumber,
+    table: &TableState,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> mtholdem::Result<HandOutcome> {
+    let mut rng = StdRng::seed_from_u64(options.seed ^ hand_number.to_u64().wrapping_mul(7919));
+    let mut deck = shuffled_deck(&mut rng);
+    let mut hole_cards = vec![None; options.players];
+    for seat in active_seats_in_deal_order(table.button, &table.stacks) {
+        let first = draw_card(&mut deck)?;
+        let second = draw_card(&mut deck)?;
+        hole_cards[seat.index()] = Some([first, second]);
+    }
+
+    let mut hand = HoldemHand::new(
+        &table.stacks,
+        table.button,
+        Chips::from_units(1),
+        Chips::from_units(2),
+        table.maximum_stack(),
+    )?;
+    let bot = HeuristicBot::from_preset(options.preset);
+
+    loop {
+        match hand.progress() {
+            HandProgress::Betting(street) => {
+                let actor = hand.next_to_act().ok_or_else(|| {
+                    mental_card_core::error::protocol("rules-only hand has no actor")
+                })?;
+                let legal_actions = hand.legal_actions()?;
+                let context =
+                    BotDecisionContext::new(options.players, actor, street, legal_actions)
+                        .with_hole_cards(hole_cards[actor.index()])
+                        .with_board(hand.board().to_vec());
+                let action = if options.human == Some(actor) {
+                    read_human_action(&context, input, output)?
+                } else {
+                    HumanInput::Action(bot.choose_action(&context, &mut rng))
+                };
+                let HumanInput::Action(action) = action else {
+                    return Ok(HandOutcome::Quit);
+                };
+                print_action(actor, street, action, legal_actions);
+                hand.apply_action(actor, action)?;
+            }
+            HandProgress::AwaitingFlop => {
+                let flop = [
+                    draw_card(&mut deck)?,
+                    draw_card(&mut deck)?,
+                    draw_card(&mut deck)?,
+                ];
+                hand.open_flop(flop)?;
+                write_board_line("flop", hand.board(), output)?;
+            }
+            HandProgress::AwaitingTurn => {
+                hand.open_turn(draw_card(&mut deck)?)?;
+                write_board_line("turn", hand.board(), output)?;
+            }
+            HandProgress::AwaitingRiver => {
+                hand.open_river(draw_card(&mut deck)?)?;
+                write_board_line("river", hand.board(), output)?;
+            }
+            HandProgress::Showdown => {
+                let mut opened = Vec::new();
+                let mut showdown_hands = vec![None; options.players];
+                for seat in hand.ledger().live_seats() {
+                    let cards = hole_cards[seat.index()];
+                    opened.push((seat, cards));
+                    showdown_hands[seat.index()] = cards;
+                }
+                let final_stacks = hand.settle_showdown(&opened)?.final_stacks().to_vec();
+                return Ok(HandOutcome::Finished(HandResult {
+                    finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
+                    showdown_hands,
+                }));
+            }
+            HandProgress::Uncontested(_) => {
+                let final_stacks = hand.settle_uncontested()?.final_stacks().to_vec();
+                return Ok(HandOutcome::Finished(HandResult {
+                    finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
+                    showdown_hands: vec![None; options.players],
+                }));
+            }
+            HandProgress::Complete => {
+                let final_stacks = hand
+                    .result()
+                    .ok_or_else(|| mental_card_core::error::protocol("rules-only result missing"))?
+                    .final_stacks()
+                    .to_vec();
+                return Ok(HandOutcome::Finished(HandResult {
+                    finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
+                    showdown_hands: vec![None; options.players],
+                }));
+            }
+            _ => {
+                return Err(mental_card_core::error::protocol(
+                    "rules-only backend does not support this hand phase",
+                ));
+            }
+        }
+    }
 }
 
 impl InProcessHand {
@@ -565,8 +689,7 @@ impl InProcessHand {
             5 => "river",
             _ => unreachable!("board updates are filtered to complete public streets"),
         };
-        writeln!(output, "{label}: {}", format_cards(&board))
-            .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+        write_board_line(label, &board, output)
     }
 }
 
@@ -580,6 +703,49 @@ fn betting_street(phase: PeerPhase) -> Street {
 
 fn board_cards(session: &PeerSession) -> Vec<Card> {
     session.board().iter().map(|card| card.card()).collect()
+}
+
+fn write_board_line(label: &str, board: &[Card], output: &mut impl Write) -> mtholdem::Result<()> {
+    writeln!(output, "{label}: {}", format_cards(board))
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn shuffled_deck(rng: &mut StdRng) -> Vec<Card> {
+    let mut deck = Vec::with_capacity(52);
+    for suit in [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades] {
+        for rank in [
+            Rank::Two,
+            Rank::Three,
+            Rank::Four,
+            Rank::Five,
+            Rank::Six,
+            Rank::Seven,
+            Rank::Eight,
+            Rank::Nine,
+            Rank::Ten,
+            Rank::Jack,
+            Rank::Queen,
+            Rank::King,
+            Rank::Ace,
+        ] {
+            deck.push(Card::new(rank, suit));
+        }
+    }
+    deck.shuffle(rng);
+    deck
+}
+
+fn draw_card(deck: &mut Vec<Card>) -> mtholdem::Result<Card> {
+    deck.pop()
+        .ok_or_else(|| mental_card_core::error::protocol("rules-only deck is empty"))
+}
+
+fn active_seats_in_deal_order(button: Seat, stacks: &[Chips]) -> Vec<Seat> {
+    (1..=stacks.len())
+        .map(|offset| (button.index() + offset) % stacks.len())
+        .filter(|index| !stacks[*index].is_zero())
+        .map(|index| Seat::new(index).expect("stack index fits in a seat"))
+        .collect()
 }
 
 fn collect_showdown_hands(sessions: &[PeerSession]) -> Vec<Option<[Card; 2]>> {
@@ -1103,6 +1269,49 @@ mod tests {
     }
 
     #[test]
+    fn rules_only_backend_runs_and_carries_stacks() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 3,
+                seed: 77,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(2),
+                backend: Backend::RulesOnly,
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("two rules-only hands finish");
+
+        assert_eq!(outcome.completed_hands, 2);
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("backend=rules-only"));
+        let starting_stacks = output
+            .lines()
+            .filter_map(|line| line.strip_prefix("starting stacks: "))
+            .collect::<Vec<_>>();
+        let final_stacks = output
+            .lines()
+            .filter_map(|line| line.strip_prefix("final stacks: "))
+            .collect::<Vec<_>>();
+        let second_start = starting_stacks[1]
+            .split(" button=")
+            .next()
+            .expect("starting stack line has stack segment");
+        assert_eq!(second_start, final_stacks[0]);
+        assert_eq!(
+            outcome
+                .final_stacks
+                .iter()
+                .map(|stack| stack.units())
+                .sum::<u64>(),
+            300
+        );
+    }
+
+    #[test]
     fn human_action_parser_rejects_illegal_raise_amounts() {
         let legal = BotDecisionContext::new(
             2,
@@ -1170,6 +1379,13 @@ mod tests {
     }
 
     #[test]
+    fn play_bot_can_select_rules_only_backend() {
+        let options = parse_options(&["--backend".to_owned(), "rules-only".to_owned()])
+            .expect("rules-only options");
+        assert_eq!(options.backend, Backend::RulesOnly);
+    }
+
+    #[test]
     fn play_bot_rejects_zero_hands() {
         assert!(parse_options(&["--hands".to_owned(), "0".to_owned()]).is_err());
     }
@@ -1183,7 +1399,7 @@ mod tests {
 
     fn test_legal_actions() -> LegalActions {
         let stacks = [Chips::from_units(100), Chips::from_units(100)];
-        let hand = mtholdem::holdem::HoldemHand::new(
+        let hand = HoldemHand::new(
             &stacks,
             Seat::new(0).expect("seat"),
             Chips::from_units(1),
@@ -1196,7 +1412,7 @@ mod tests {
 
     fn test_open_bet_actions() -> LegalActions {
         let stacks = [Chips::from_units(100), Chips::from_units(100)];
-        let mut hand = mtholdem::holdem::HoldemHand::new(
+        let mut hand = HoldemHand::new(
             &stacks,
             Seat::new(0).expect("seat"),
             Chips::from_units(1),
@@ -1209,9 +1425,9 @@ mod tests {
         hand.apply_action(Seat::new(1).expect("seat"), BetAction::Check)
             .expect("big blind check");
         hand.open_flop([
-            Card::new(mtholdem::Rank::Two, mtholdem::Suit::Clubs),
-            Card::new(mtholdem::Rank::Seven, mtholdem::Suit::Diamonds),
-            Card::new(mtholdem::Rank::Nine, mtholdem::Suit::Hearts),
+            Card::new(Rank::Two, Suit::Clubs),
+            Card::new(Rank::Seven, Suit::Diamonds),
+            Card::new(Rank::Nine, Suit::Hearts),
         ])
         .expect("open flop");
         hand.legal_actions().expect("postflop legal")

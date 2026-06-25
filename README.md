@@ -110,11 +110,13 @@ cargo run --locked -p mtholdem --example simulated_hand
 cargo run --locked -p mtholdem-cli -- abi-version
 cargo run --locked -p mtholdem-cli -- play-bot --players 3 --hands 1
 cargo run --locked -p mtholdem-cli -- play-bot --bots-only --players 3 --seed 7
+cargo run --locked -p mtholdem-cli -- play-bot --bots-only --players 3 --hands 2 --backend rules-only
 ```
 
 `play-bot` prints public board updates as flop, turn, and river even after the
 human seat folds. Bot hole cards are shown only when publicly opened at
-showdown.
+showdown. Multi-hand runs carry final stacks into the next hand and print the
+selected backend, starting stacks, and button at each hand boundary.
 
 Minimal Hold'em session configuration:
 

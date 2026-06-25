@@ -95,10 +95,13 @@ cargo run --locked -p mtholdem --example simulated_hand
 cargo run --locked -p mtholdem-cli -- abi-version
 cargo run --locked -p mtholdem-cli -- play-bot --players 3 --hands 1
 cargo run --locked -p mtholdem-cli -- play-bot --bots-only --players 3 --seed 7
+cargo run --locked -p mtholdem-cli -- play-bot --bots-only --players 3 --hands 2 --backend rules-only
 ```
 
 `play-bot` は human seat が fold した後も flop、turn、river の public board update を表示します。
 bot の hole cards は showdown で公開されたものだけ表示します。
+複数 hand 実行では final stacks を次 hand に引き継ぎ、各 hand の開始時に backend、starting
+stacks、button を表示します。
 
 最小の Hold'em session 設定例です。金額は integer chip unit で、浮動小数点は使用しません。
 
