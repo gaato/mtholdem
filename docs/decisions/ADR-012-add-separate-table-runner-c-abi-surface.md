@@ -76,7 +76,15 @@ fields such as:
 - local or human hole cards when visible to that host;
 - starting stacks;
 - final stacks;
-- showdown cards that have actually been opened.
+- showdown cards that have actually been opened;
+- evaluated showdown hand categories, such as pair, straight, flush, or full
+  house, computed only for opened hands.
+
+Hand-category labels are derived display metadata, not new consensus data. The
+source of truth remains the deterministic evaluator and the already-opened
+cards. Table events and CLI output may include category names for usability,
+but they must not evaluate or label folded, mucked, or otherwise undisclosed
+hole cards.
 
 The backend must be selected explicitly. `MTH_TABLE_BACKEND_PEER` and
 `MTH_TABLE_BACKEND_RULES_ONLY` have different security and verification
