@@ -187,4 +187,5 @@ production dependency graphs unless a downstream crate opts into it.
 - Validation record: [VALIDATION.md](VALIDATION.md)
 - Third-party code notice: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-Licensed under either of MIT or Apache-2.0.
+Licensed under the Mozilla Public License 2.0. Third-party code notices are
+listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

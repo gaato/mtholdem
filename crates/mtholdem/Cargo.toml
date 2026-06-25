@@ -18,6 +18,7 @@ include = [
     "README.md",
     "SECURITY.md",
     "docs/**",
+    "LICENSE-MPL-2.0",
     "LICENSE-APACHE",
     "LICENSE-MIT",
 ]

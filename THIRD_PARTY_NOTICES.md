@@ -14,8 +14,9 @@ context integration, verification trust boundaries, documentation changes, and P
 CRS point derivation. The upstream project explicitly describes itself as experimental and
 unaudited; that warning also applies to the derived implementation.
 
-The full MIT and Apache-2.0 license texts are distributed in `LICENSE-MIT` and
-`LICENSE-APACHE`.
+This workspace is distributed under MPL-2.0. The full MIT and Apache-2.0
+license texts are distributed in `LICENSE-MIT` and `LICENSE-APACHE` to preserve
+the upstream notice.
 
 ## Rust dependencies
 
