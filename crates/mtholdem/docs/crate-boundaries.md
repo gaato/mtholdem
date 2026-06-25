@@ -163,7 +163,10 @@ wire artifacts, validate transcripts, or expose a C ABI surface. CLI and future
 single-player shells may use it to answer `RequestAction` effects while keeping
 the peer/session loop in the host. See
 [ADR-010](../../../docs/decisions/ADR-010-keep-bot-policy-host-side.md) for the
-single-player and human-input boundary.
+single-player and human-input boundary. The bot policy itself is still
+pre-stable and should be redesigned around assessment, intent, and sizing
+rather than patched around the initial min-raise heuristic; see
+[ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
 
 Multi-hand table/session running is also host-side orchestration. Stack
 carry-over, button rotation, busted-seat handling, human-seat prompts, bot-seat
