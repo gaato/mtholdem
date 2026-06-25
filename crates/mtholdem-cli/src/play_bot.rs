@@ -5,7 +5,6 @@ use std::io::{self, BufRead, Write};
 
 use mental_card_core::identity::IdentitySecret;
 use mtholdem::betting::{BetAction, LegalActions, Street};
-use mtholdem::card::evaluate_best;
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::deal::DealPlan;
 use mtholdem::holdem::{HandProgress, HoldemHand};
@@ -13,6 +12,7 @@ use mtholdem::transcript::TranscriptAnchor;
 use mtholdem::{Card, Chips, HandNumber, Rank, Seat, SessionId, Suit};
 use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
 use mtholdem_peer::{FinishedHand, HostEffect, PeerPhase, PeerSession};
+use mtholdem_table::{TableBackend, TableShowdown};
 use rand::SeedableRng;
 use rand::rngs::{OsRng, StdRng};
 use rand::seq::SliceRandom;
@@ -28,22 +28,7 @@ struct Options {
     preset: BotPreset,
     human: Option<Seat>,
     hands: Option<u64>,
-    backend: Backend,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Backend {
-    Peer,
-    RulesOnly,
-}
-
-impl Backend {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Peer => "peer",
-            Self::RulesOnly => "rules-only",
-        }
-    }
+    backend: TableBackend,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,8 +46,7 @@ enum HandOutcome {
 #[derive(Debug)]
 struct HandResult {
     finished: FinishedHand,
-    board: Vec<Card>,
-    showdown_hands: Vec<Option<[Card; 2]>>,
+    showdown: TableShowdown,
 }
 
 #[derive(Debug, Default)]
@@ -167,7 +151,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         preset: BotPreset::Balanced,
         human: Some(Seat::new(0).expect("seat zero is valid")),
         hands: None,
-        backend: Backend::Peer,
+        backend: TableBackend::Peer,
     };
     let mut index = 0;
     while index < args.len() {
@@ -214,10 +198,10 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-fn parse_backend(value: Option<&str>) -> Result<Backend, String> {
+fn parse_backend(value: Option<&str>) -> Result<TableBackend, String> {
     match value.ok_or_else(|| "--backend requires a value".to_owned())? {
-        "peer" | "peer-backed" => Ok(Backend::Peer),
-        "rules-only" | "rules" => Ok(Backend::RulesOnly),
+        "peer" | "peer-backed" => Ok(TableBackend::Peer),
+        "rules-only" | "rules" => Ok(TableBackend::RulesOnly),
         other => Err(format!("unknown play-bot backend: {other}")),
     }
 }
@@ -310,7 +294,7 @@ fn run_session(
                     options.preset
                 )
                 .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-                write_showdown_summary(&result.board, &result.showdown_hands, output)?;
+                write_showdown_summary(&result.showdown, output)?;
                 write!(output, "final stacks:")
                     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
                 for (index, stack) in result.finished.final_stacks().iter().enumerate() {
@@ -331,7 +315,7 @@ fn run_session(
 }
 
 fn write_table_state(
-    backend: Backend,
+    backend: TableBackend,
     table: &TableState,
     output: &mut impl Write,
 ) -> mtholdem::Result<()> {
@@ -358,8 +342,8 @@ fn run_hand(
     output: &mut impl Write,
 ) -> mtholdem::Result<HandOutcome> {
     match options.backend {
-        Backend::Peer => run_peer_hand(options, hand_number, table, input, output),
-        Backend::RulesOnly => run_rules_only_hand(options, hand_number, table, input, output),
+        TableBackend::Peer => run_peer_hand(options, hand_number, table, input, output),
+        TableBackend::RulesOnly => run_rules_only_hand(options, hand_number, table, input, output),
     }
 }
 
@@ -501,16 +485,14 @@ fn run_rules_only_hand(
                 let final_stacks = hand.settle_showdown(&opened)?.final_stacks().to_vec();
                 return Ok(HandOutcome::Finished(HandResult {
                     finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
-                    board: hand.board().to_vec(),
-                    showdown_hands,
+                    showdown: table_showdown(hand.board(), &showdown_hands)?,
                 }));
             }
             HandProgress::Uncontested(_) => {
                 let final_stacks = hand.settle_uncontested()?.final_stacks().to_vec();
                 return Ok(HandOutcome::Finished(HandResult {
                     finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
-                    board: hand.board().to_vec(),
-                    showdown_hands: vec![None; options.players],
+                    showdown: TableShowdown::default(),
                 }));
             }
             HandProgress::Complete => {
@@ -521,8 +503,7 @@ fn run_rules_only_hand(
                     .to_vec();
                 return Ok(HandOutcome::Finished(HandResult {
                     finished: FinishedHand::new(hand_number, TranscriptAnchor::EMPTY, final_stacks),
-                    board: hand.board().to_vec(),
-                    showdown_hands: vec![None; options.players],
+                    showdown: TableShowdown::default(),
                 }));
             }
             _ => {
@@ -599,8 +580,7 @@ impl InProcessHand {
         let board = self.sessions.first().map_or_else(Vec::new, board_cards);
         Ok(HandOutcome::Finished(HandResult {
             finished,
-            board,
-            showdown_hands,
+            showdown: table_showdown(&board, &showdown_hands)?,
         }))
     }
 
@@ -764,33 +744,40 @@ fn collect_showdown_hands(sessions: &[PeerSession]) -> Vec<Option<[Card; 2]>> {
         .collect()
 }
 
-fn write_showdown_summary(
+fn table_showdown(
     board: &[Card],
     showdown_hands: &[Option<[Card; 2]>],
+) -> mtholdem::Result<TableShowdown> {
+    TableShowdown::from_opened(
+        board,
+        showdown_hands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cards)| {
+                cards.map(|hole| (Seat::new(index).expect("session count fits seats"), hole))
+            }),
+    )
+}
+
+fn write_showdown_summary(
+    showdown: &TableShowdown,
     output: &mut impl Write,
 ) -> mtholdem::Result<()> {
-    if showdown_hands.iter().all(Option::is_none) {
+    if showdown.is_empty() {
         writeln!(output, "showdown: none")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         return Ok(());
     }
     write!(output, "showdown:")
         .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-    for (index, cards) in showdown_hands.iter().enumerate() {
-        if let Some([first, second]) = cards {
-            let category = showdown_category(board, [*first, *second])?;
-            write!(output, " seat{index}={first} {second} ({category})")
-                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-        }
+    for hand in showdown.hands() {
+        let [first, second] = hand.hole_cards;
+        let seat = hand.seat.index();
+        let category = hand.category;
+        write!(output, " seat{seat}={first} {second} ({category})")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     }
     writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
-}
-
-fn showdown_category(board: &[Card], hole: [Card; 2]) -> mtholdem::Result<mtholdem::HandCategory> {
-    let mut cards = Vec::with_capacity(hole.len() + board.len());
-    cards.extend_from_slice(&hole);
-    cards.extend_from_slice(board);
-    evaluate_best(&cards).map(|value| value.category())
 }
 
 fn read_human_action(
@@ -1018,7 +1005,7 @@ mod tests {
                     preset: BotPreset::Balanced,
                     human: None,
                     hands: None,
-                    backend: Backend::Peer,
+                    backend: TableBackend::Peer,
                 },
                 HandNumber::FIRST,
                 &TableState::new(2),
@@ -1051,7 +1038,7 @@ mod tests {
                     preset: BotPreset::Balanced,
                     human: Some(Seat::new(0).expect("seat")),
                     hands: None,
-                    backend: Backend::Peer,
+                    backend: TableBackend::Peer,
                 },
                 HandNumber::FIRST,
                 &TableState::new(2),
@@ -1085,7 +1072,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(1),
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut input,
             &mut output,
@@ -1109,7 +1096,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(1),
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -1133,7 +1120,7 @@ mod tests {
                     preset: BotPreset::Nit,
                     human: None,
                     hands: None,
-                    backend: Backend::Peer,
+                    backend: TableBackend::Peer,
                 },
                 HandNumber::FIRST,
                 &TableState::new(4),
@@ -1165,7 +1152,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(2),
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut input,
             &mut output,
@@ -1187,7 +1174,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: None,
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut input,
             &mut output,
@@ -1208,7 +1195,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: None,
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -1229,7 +1216,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(2),
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -1246,11 +1233,11 @@ mod tests {
         let outcome = run_session(
             Options {
                 players: 3,
-                seed: 77,
+                seed: 1,
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(2),
-                backend: Backend::Peer,
+                backend: TableBackend::Peer,
             },
             &mut io::empty(),
             &mut output,
@@ -1294,7 +1281,7 @@ mod tests {
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(2),
-                backend: Backend::RulesOnly,
+                backend: TableBackend::RulesOnly,
             },
             &mut io::empty(),
             &mut output,
@@ -1391,20 +1378,29 @@ mod tests {
             Card::new(Rank::Three, Suit::Hearts),
             Card::new(Rank::Six, Suit::Diamonds),
         ];
-        let showdown_hands = [
-            None,
-            Some([
-                Card::new(Rank::Eight, Suit::Spades),
-                Card::new(Rank::Ten, Suit::Spades),
-            ]),
-            Some([
-                Card::new(Rank::Ten, Suit::Hearts),
-                Card::new(Rank::Ace, Suit::Spades),
-            ]),
-        ];
+        let showdown = TableShowdown::from_opened(
+            &board,
+            [
+                (
+                    Seat::new(1).expect("seat"),
+                    [
+                        Card::new(Rank::Eight, Suit::Spades),
+                        Card::new(Rank::Ten, Suit::Spades),
+                    ],
+                ),
+                (
+                    Seat::new(2).expect("seat"),
+                    [
+                        Card::new(Rank::Ten, Suit::Hearts),
+                        Card::new(Rank::Ace, Suit::Spades),
+                    ],
+                ),
+            ],
+        )
+        .expect("showdown summary");
 
         let mut output = Vec::new();
-        write_showdown_summary(&board, &showdown_hands, &mut output).expect("showdown summary");
+        write_showdown_summary(&showdown, &mut output).expect("showdown summary");
 
         assert_eq!(
             String::from_utf8(output).expect("utf8"),
@@ -1428,7 +1424,7 @@ mod tests {
     fn play_bot_can_select_rules_only_backend() {
         let options = parse_options(&["--backend".to_owned(), "rules-only".to_owned()])
             .expect("rules-only options");
-        assert_eq!(options.backend, Backend::RulesOnly);
+        assert_eq!(options.backend, TableBackend::RulesOnly);
     }
 
     #[test]

@@ -171,12 +171,11 @@ rather than patched around the initial min-raise heuristic; see
 Multi-hand table/session running is also host-side orchestration. Stack
 carry-over, button rotation, busted-seat handling, human-seat prompts, bot-seat
 dispatch, and Godot-friendly table events belong above `mtholdem-peer`, not
-inside the peer driver or bot policy. The CLI may keep this runner internally
-while the behavior is experimental. If another host such as Godot needs the
-same table event model, extract a target-independent crate such as
-`mtholdem-table` or `mtholdem-host`. The peer-backed backend is the reference
-path; a future rules-only backend may use `mtholdem` plus `mtholdem-bot` for
-lightweight local play while preserving the same table events. See
+inside the peer driver or bot policy. `mtholdem-table` owns the first shared
+table event vocabulary; the CLI may still keep runner control flow internally
+while the behavior is experimental. The peer-backed backend is the reference
+path; a rules-only backend may use `mtholdem` plus `mtholdem-bot` for
+lightweight local play while preserving the same table event vocabulary. See
 [ADR-011](../../../docs/decisions/ADR-011-keep-table-session-runner-host-side.md).
 
 If this table runner is exported through C, it must use a separate
@@ -201,8 +200,8 @@ participation protocol.
   target wrappers.
 - `mtholdem-bot`: host-side heuristic action policy for demos and
   single-player shells.
-- future `mtholdem-table` or `mtholdem-host`: optional host-side multi-hand
-  table runner and event surface, if CLI/Godot/WASM need shared orchestration.
+- `mtholdem-table`: host-side table event vocabulary for local runners, CLI,
+  C ABI planning, Godot wrappers, WASM, and tests.
 - `mtholdem-cli`: the scriptable CLI wrapper.
 - `mtholdem-ffi`: the C ABI boundary and opaque-handle owner.
 - `mental-card-core`: the workspace's dependency core for standard-card

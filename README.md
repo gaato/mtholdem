@@ -3,7 +3,8 @@
 This repository is a **Sans-I/O Rust workspace** for building peer-to-peer Texas
 Hold'em without a trusted dealer. It separates reusable encrypted-card
 operations, Hold'em protocol rules, peer-session orchestration, byte-oriented
-adapter boundaries, and deterministic test fixtures into separate crates.
+adapter boundaries, host-side table events, and deterministic test fixtures into
+separate crates.
 
 > **Important:** This is unaudited research and prototype software. It has not
 > received an independent cryptographic audit, formal verification, or production
@@ -24,6 +25,7 @@ API documentation for `main`: <https://gaato.github.io/mtholdem/>
 | [`mtholdem-peer`](crates/mtholdem-peer) | Transport-neutral peer-session orchestration |
 | [`mtholdem-adapter`](crates/mtholdem-adapter) | Byte-oriented boundary shared by CLI, C ABI, and downstream WASM packages |
 | [`mtholdem-bot`](crates/mtholdem-bot) | Host-side heuristic bot policy for demos and single-player shells |
+| [`mtholdem-table`](crates/mtholdem-table) | Host-side table event vocabulary for CLI, C ABI, Godot, WASM, and tests |
 | [`mtholdem-ffi`](crates/mtholdem-ffi) | C ABI with opaque handles, ABI versioning, error codes, and caller-owned buffers |
 | [`mtholdem-cli`](crates/mtholdem-cli) | Scriptable command-line entrypoint |
 | [`mtholdem-testkit`](crates/mtholdem-testkit) | Deterministic fixtures for downstream integration tests |

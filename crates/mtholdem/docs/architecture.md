@@ -60,10 +60,10 @@ harness without changing the consensus state machines.
        │ for demos and single-player hosts │
        └───────────────────────────────────┘
 
-             future mtholdem-table/host
+                  mtholdem-table
        ┌───────────────────────────────────┐
-       │ optional multi-hand table runner  │
-       │ and host-facing event surface     │
+       │ host-side table event vocabulary  │
+       │ for CLI / C ABI / Godot / WASM    │
        └───────────────────────────────────┘
 
                  mtholdem-testkit
@@ -182,19 +182,22 @@ postflop assessment may use bounded deterministic Monte Carlo equity while respe
 information boundaries.
 see [ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
 
-## Future host table runner
+## Host table events and future runner
 
-Multi-hand table orchestration stays above `mtholdem-peer` and `mtholdem-bot`. A shared runner may
-later carry final stacks into the next hand, rotate the button, remove busted seats, dispatch bot
-actions, and emit table-oriented events for CLI, Godot, WASM, or C ABI consumers. It should be
-extracted only after the CLI runner and at least one downstream host need the same behavior.
-Peer-backed execution is the reference path because it exercises P2P artifacts; a future rules-only
-backend may reuse the same table events for lightweight local play. Showdown hand-category labels
-are derived only from opened hands and are display metadata, not consensus inputs. See
+Multi-hand table orchestration stays above `mtholdem-peer` and
+`mtholdem-bot`. `mtholdem-table` owns the first shared event vocabulary for
+backend selection, board openings, showdown summaries, and final hand
+summaries. The CLI still owns the experimental runner control flow for stack
+carry-over, button rotation, busted-seat handling, human prompts, and bot
+dispatch. Move that control flow into `mtholdem-table` only after another host
+needs the same behavior. Peer-backed execution is the reference path because it
+exercises P2P artifacts; a rules-only backend may reuse the same table events
+for lightweight local play. Showdown hand-category labels are derived only from
+opened hands and are display metadata, not consensus inputs. See
 [ADR-011](../../../docs/decisions/ADR-011-keep-table-session-runner-host-side.md).
 If exported to C, table running uses a separate polling-oriented `mth_table_*`
-surface instead of `mth_peer_*`; first extract the Rust `TableEvent` boundary,
-then encode it for external hosts. See
+surface instead of `mth_peer_*`; encode the `mtholdem-table` event vocabulary
+for external hosts. See
 [ADR-012](../../../docs/decisions/ADR-012-add-separate-table-runner-c-abi-surface.md).
 Custom bots that join open games use the same `mth_peer_*` participant boundary
 as human clients; the table runner is only for local orchestration and

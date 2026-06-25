@@ -488,6 +488,7 @@ dependencies = [
  "mtholdem-adapter",
  "mtholdem-bot",
  "mtholdem-peer",
+ "mtholdem-table",
  "rand 0.8.6",
 ]
 
@@ -509,6 +510,13 @@ dependencies = [
  "mental-card-core",
  "mtholdem",
  "rand 0.8.6",
+]
+
+[[package]]
+name = "mtholdem-table"
+version = "0.1.0"
+dependencies = [
+ "mtholdem",
 ]
 
 [[package]]

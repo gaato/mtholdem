@@ -32,11 +32,12 @@ Keep multi-hand table/session running as host-side orchestration above
 `mtholdem-peer`. Do not fold it into `mtholdem`, `mtholdem-peer`, or
 `mtholdem-bot`.
 
-The eventual shared runner should be a target-independent host-facing layer. It
-may live first as CLI-internal code while the behavior is still experimental,
-but if Godot or another host starts sharing the same needs, extract it into a
-Rust crate above `mtholdem-peer` and `mtholdem-bot`, such as
-`mtholdem-table` or `mtholdem-host`.
+The eventual shared runner should be a target-independent host-facing layer.
+The first extraction is `mtholdem-table`, a shared event vocabulary above
+`mtholdem` for CLI, C ABI planning, Godot wrappers, WASM, and tests. Runner
+control flow may still live as CLI-internal code while the behavior is
+experimental. Move it into `mtholdem-table` only if Godot or another host
+starts sharing the same needs.
 
 The runner should be designed so the table event model can support more than
 one backend:
@@ -149,5 +150,5 @@ than overloading the existing peer-session handles.
   exported, while still keeping Godot classes and GDExtension build files in
   the downstream Godot repository.
 - `mtholdem-bot` remains reusable by the runner but does not own the runner.
-- A future extraction adds a new dependency branch above `mtholdem-peer` rather
-  than changing consensus crate dependencies.
+- The first extraction adds `mtholdem-table` as a host-side event vocabulary
+  without changing peer or bot responsibilities.

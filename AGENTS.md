@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Keep the root small. This repository is a seven-crate Sans-I/O workspace.
+Keep the root small. This repository is a nine-crate Sans-I/O workspace.
 
 - `README.md` summarizes the workspace and links to the architecture docs.
 - `docs/decisions/` stores ADRs. Read these before changing architecture,
@@ -16,6 +16,11 @@ Keep the root small. This repository is a seven-crate Sans-I/O workspace.
   emits host effects instead of doing I/O.
 - `crates/mtholdem-adapter` owns the byte-oriented boundary shared by CLI, C ABI,
   and downstream engine or WASM package consumers.
+- `crates/mtholdem-bot` owns host-side bot action policy for demos and
+  single-player shells. It is not a protocol crate.
+- `crates/mtholdem-table` owns host-side table event vocabulary for local table
+  runners, CLI output, C ABI planning, Godot wrappers, WASM, and tests. It does
+  not own transport, UI, storage, timers, or bot policy.
 - `crates/mtholdem-cli` and `crates/mtholdem-ffi` expose in-workspace
   target-specific wrappers over the adapter boundary.
 - `crates/mtholdem-testkit` owns deterministic fixtures for downstream tests.
@@ -28,8 +33,9 @@ usable by all of them. Crate-boundary rationale belongs in ADRs, especially
 ADR-001 through ADR-008.
 
 Dependencies must remain one-way:
-`mental-card-core <- mtholdem <- mtholdem-peer <- mtholdem-adapter <-
-in-workspace target wrappers`, with `mtholdem-testkit` used only for
+`mental-card-core <- mtholdem <- {mtholdem-peer, mtholdem-bot,
+mtholdem-table} <- in-workspace target wrappers`, with `mtholdem-adapter`
+bridging peer-session byte boundaries and `mtholdem-testkit` used only for
 deterministic tests.
 Core must not learn Hold'em terms such as blinds, streets, hole cards, pots,
 muck, or showdown.

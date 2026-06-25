@@ -104,10 +104,10 @@ properties and must not be hidden behind an automatic fallback. Peer-backed
 local play exercises the P2P artifact path. Rules-only local play is lighter
 and suitable for UI iteration, simulation, or purely local single-player.
 
-Before adding `mth_table_*` to `mtholdem-ffi`, first extract a Rust table-event
-boundary from the CLI runner. The CLI should consume the same Rust table events
-that the C ABI later encodes. This prevents terminal wording and temporary CLI
-state from becoming the ABI.
+Before adding `mth_table_*` to `mtholdem-ffi`, encode the Rust event vocabulary
+from `mtholdem-table` rather than CLI text. The CLI may still own experimental
+runner control flow, but table events should remain target-independent so
+terminal wording and temporary CLI state do not become the ABI.
 
 ## Alternatives Considered
 
@@ -150,7 +150,7 @@ state from becoming the ABI.
 ### Add the C ABI before extracting Rust table events
 - Pros: Gets Godot integration moving quickly.
 - Cons: Freezes CLI-internal state and text-loop assumptions into a public ABI.
-- Rejected: Prove the Rust `TableEvent` boundary first, then encode it in C.
+- Rejected: Prove the Rust table-event vocabulary first, then encode it in C.
 
 ## Consequences
 - `mth_peer_*` remains the multiplayer and artifact-routing ABI.
@@ -162,5 +162,5 @@ state from becoming the ABI.
   `PeerSession` handles.
 - The table ABI can expose both peer-backed and rules-only local play while
   preserving the same event vocabulary.
-- A new Rust table-event boundary is the next implementation step before any C
-  ABI entrypoints are added.
+- `mtholdem-table` is the Rust event vocabulary to encode before any
+  `mth_table_*` C ABI entrypoints are added.

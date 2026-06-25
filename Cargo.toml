@@ -7,6 +7,7 @@ members = [
     "crates/mtholdem-cli",
     "crates/mtholdem-ffi",
     "crates/mtholdem-peer",
+    "crates/mtholdem-table",
     "crates/mtholdem-testkit",
 ]
 resolver = "2"
@@ -32,6 +33,7 @@ mtholdem-bot = { version = "0.1.0", path = "crates/mtholdem-bot" }
 mtholdem-cli = { version = "0.1.0", path = "crates/mtholdem-cli" }
 mtholdem-ffi = { version = "0.1.0", path = "crates/mtholdem-ffi" }
 mtholdem-peer = { version = "0.1.0", path = "crates/mtholdem-peer" }
+mtholdem-table = { version = "0.1.0", path = "crates/mtholdem-table" }
 mtholdem-testkit = { version = "0.1.0", path = "crates/mtholdem-testkit" }
 proptest = "1.6.0"
 rand = { version = "0.8.5", features = ["getrandom"] }
