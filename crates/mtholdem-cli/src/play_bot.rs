@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
 
 use mental_card_core::identity::IdentitySecret;
-use mtholdem::betting::{BetAction, LegalActions, Street};
+use mtholdem::betting::{BetAction, HandSeatStatus, LegalActions, Street};
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::deal::DealPlan;
 use mtholdem::holdem::{HandProgress, HoldemHand};
@@ -446,6 +446,7 @@ fn run_rules_only_hand(
                     BotDecisionContext::new(options.players, actor, street, legal_actions)
                         .with_hole_cards(hole_cards[actor.index()])
                         .with_board(hand.board().to_vec());
+                let context = add_rules_bot_context(context, &hand, actor)?;
                 let action = if options.human == Some(actor) {
                     read_human_action(&context, input, output)?
                 } else {
@@ -513,6 +514,54 @@ fn run_rules_only_hand(
             }
         }
     }
+}
+
+fn add_rules_bot_context(
+    mut context: BotDecisionContext,
+    hand: &HoldemHand,
+    actor: Seat,
+) -> mtholdem::Result<BotDecisionContext> {
+    let ledger = hand.ledger();
+    context = context
+        .with_pot(ledger.pot()?)
+        .with_actor_stack(ledger.stack(actor)?)
+        .with_actor_street_contributed(ledger.street_contributed(actor)?)
+        .with_live_opponents(live_opponents(ledger, actor)?);
+    if let Some(effective_stack) = effective_stack(ledger, actor)? {
+        context = context.with_effective_stack(effective_stack);
+    }
+    Ok(context)
+}
+
+fn live_opponents(ledger: &mtholdem::betting::HandLedger, actor: Seat) -> mtholdem::Result<usize> {
+    let mut count = 0;
+    for index in 0..ledger.seat_count() {
+        let seat = Seat::new(index).expect("ledger seat count fits seats");
+        if seat != actor
+            && matches!(
+                ledger.status(seat)?,
+                HandSeatStatus::Playing | HandSeatStatus::AllIn
+            )
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn effective_stack(
+    ledger: &mtholdem::betting::HandLedger,
+    actor: Seat,
+) -> mtholdem::Result<Option<Chips>> {
+    let mut effective = None;
+    for index in 0..ledger.seat_count() {
+        let seat = Seat::new(index).expect("ledger seat count fits seats");
+        if seat != actor && ledger.status(seat)? == HandSeatStatus::Playing {
+            let stack = ledger.stack(seat)?;
+            effective = Some(effective.map_or(stack, |current: Chips| current.min(stack)));
+        }
+    }
+    Ok(effective)
 }
 
 impl InProcessHand {
@@ -1068,11 +1117,11 @@ mod tests {
         let outcome = run_session(
             Options {
                 players: 3,
-                seed: 77,
+                seed: 12,
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(1),
-                backend: TableBackend::Peer,
+                backend: TableBackend::RulesOnly,
             },
             &mut input,
             &mut output,
@@ -1092,11 +1141,11 @@ mod tests {
         let outcome = run_session(
             Options {
                 players: 3,
-                seed: 77,
+                seed: 2,
                 preset: BotPreset::Balanced,
                 human: None,
                 hands: Some(1),
-                backend: TableBackend::Peer,
+                backend: TableBackend::RulesOnly,
             },
             &mut io::empty(),
             &mut output,

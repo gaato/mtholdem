@@ -176,10 +176,10 @@ seeded RNG is deliberately predictable and therefore suitable only for tests.
 `HeuristicBot` converts a `BotDecisionContext` and a host-provided RNG into one legal `BetAction`.
 The profile values model looseness, aggression, call bias, bluffing, and randomness for demos. The
 crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
-use it only when answering `HostEffect::RequestAction`. The current lightweight policy should be
-replaced with an assessment, intent, and sizing pipeline before treating it as a real local opponent;
-postflop assessment may use bounded deterministic Monte Carlo equity while respecting public
-information boundaries.
+use it only when answering `HostEffect::RequestAction`. The current policy is still pre-stable, but
+it now exposes assessment, intent, and sizing stages before final legality mapping. Postflop
+assessment may later add bounded deterministic Monte Carlo equity while respecting public information
+boundaries.
 see [ADR-013](decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
 
 ## Host table events and future runner

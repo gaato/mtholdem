@@ -1,14 +1,14 @@
-//! Lightweight host-side bot policy for `mtholdem` demos.
+//! Host-side bot policy for `mtholdem` demos and local play.
 //!
 //! This crate is not part of the dealerless consensus protocol. It chooses legal
-//! betting actions for demo hosts such as the CLI or a future single-player game
-//! wrapper. Protocol validation, transcript ordering, and settlement-facing state
-//! remain in `mtholdem` and `mtholdem-peer`.
+//! betting actions for hosts such as the CLI or a future single-player wrapper.
+//! Protocol validation, transcript ordering, and settlement-facing state remain
+//! in `mtholdem` and `mtholdem-peer`.
 
 #![forbid(unsafe_code)]
 
 use mtholdem::betting::{BetAction, LegalActions, Street};
-use mtholdem::{Card, Chips, Rank, Seat};
+use mtholdem::{Card, Chips, HandCategory, Rank, Seat};
 use rand::Rng;
 
 /// A configurable lightweight bot tendency profile.
@@ -84,11 +84,11 @@ impl BotPreset {
     #[must_use]
     pub const fn profile(self) -> BotProfile {
         match self {
-            Self::Nit => BotProfile::new(0.20, 0.35, 0.20, 0.02, 0.08),
-            Self::Balanced => BotProfile::new(0.35, 0.55, 0.35, 0.06, 0.12),
-            Self::LoosePassive => BotProfile::new(0.55, 0.25, 0.65, 0.03, 0.15),
-            Self::Lag => BotProfile::new(0.55, 0.75, 0.35, 0.12, 0.18),
-            Self::Maniac => BotProfile::new(0.75, 0.90, 0.45, 0.25, 0.25),
+            Self::Nit => BotProfile::new(0.18, 0.32, 0.20, 0.01, 0.06),
+            Self::Balanced => BotProfile::new(0.34, 0.52, 0.34, 0.05, 0.10),
+            Self::LoosePassive => BotProfile::new(0.56, 0.22, 0.68, 0.02, 0.12),
+            Self::Lag => BotProfile::new(0.56, 0.74, 0.32, 0.11, 0.16),
+            Self::Maniac => BotProfile::new(0.72, 0.90, 0.38, 0.22, 0.22),
         }
     }
 }
@@ -108,10 +108,22 @@ pub struct BotDecisionContext {
     pub hole_cards: Option<[Card; 2]>,
     /// Public community cards visible to all players.
     pub board: Vec<Card>,
+    /// Current pot size, if the host can expose it without leaking hidden data.
+    pub pot: Option<Chips>,
+    /// Actor's remaining stack before acting, if known.
+    pub actor_stack: Option<Chips>,
+    /// Actor's contribution on this street, if known.
+    pub actor_street_contributed: Option<Chips>,
+    /// Smallest remaining live opponent stack, if known.
+    pub effective_stack: Option<Chips>,
+    /// Number of live opponents who can still contest the pot.
+    pub live_opponents: Option<usize>,
+    /// Number of raises already made on this street, if known.
+    pub street_raise_count: Option<u8>,
 }
 
 impl BotDecisionContext {
-    /// Creates a context with no known private cards or board cards.
+    /// Creates a context with no optional private, board, pot, stack, or action-depth facts.
     #[must_use]
     pub fn new(
         player_count: usize,
@@ -126,6 +138,12 @@ impl BotDecisionContext {
             legal_actions,
             hole_cards: None,
             board: Vec::new(),
+            pot: None,
+            actor_stack: None,
+            actor_street_contributed: None,
+            effective_stack: None,
+            live_opponents: None,
+            street_raise_count: None,
         }
     }
 
@@ -142,6 +160,104 @@ impl BotDecisionContext {
         self.board = board.into();
         self
     }
+
+    /// Adds the current pot size.
+    #[must_use]
+    pub const fn with_pot(mut self, pot: Chips) -> Self {
+        self.pot = Some(pot);
+        self
+    }
+
+    /// Adds the actor's remaining stack before acting.
+    #[must_use]
+    pub const fn with_actor_stack(mut self, stack: Chips) -> Self {
+        self.actor_stack = Some(stack);
+        self
+    }
+
+    /// Adds the actor's contribution on the current street.
+    #[must_use]
+    pub const fn with_actor_street_contributed(mut self, contributed: Chips) -> Self {
+        self.actor_street_contributed = Some(contributed);
+        self
+    }
+
+    /// Adds the smallest remaining live opponent stack.
+    #[must_use]
+    pub const fn with_effective_stack(mut self, effective_stack: Chips) -> Self {
+        self.effective_stack = Some(effective_stack);
+        self
+    }
+
+    /// Adds the number of live opponents.
+    #[must_use]
+    pub const fn with_live_opponents(mut self, live_opponents: usize) -> Self {
+        self.live_opponents = Some(live_opponents);
+        self
+    }
+
+    /// Adds the number of raises already made on the current street.
+    #[must_use]
+    pub const fn with_street_raise_count(mut self, street_raise_count: u8) -> Self {
+        self.street_raise_count = Some(street_raise_count);
+        self
+    }
+}
+
+/// Strength and pressure assessment used before choosing an action.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HandAssessment {
+    /// Normalized hand strength estimate in `0.0..=1.0`.
+    pub strength: f32,
+    /// Made-hand category, when the board is complete enough to evaluate.
+    pub category: Option<HandCategory>,
+    /// Lightweight draw and overcard potential in `0.0..=1.0`.
+    pub draw_potential: f32,
+    /// Cost pressure from call amount, pot odds, and multiway context.
+    pub pressure: f32,
+    /// Total score used for continue and aggression thresholds.
+    pub score: f32,
+}
+
+/// Action intent selected before sizing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActionIntent {
+    /// Fold to a bet.
+    Fold,
+    /// Check when no call is required.
+    Check,
+    /// Call an existing bet.
+    Call,
+    /// Open the betting on a street.
+    Bet,
+    /// Raise an existing bet.
+    Raise,
+    /// Move all-in.
+    AllIn,
+}
+
+/// Chosen sizing family for a bet or raise intent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BetSizing {
+    /// No bet size is needed.
+    None,
+    /// Use a fraction of the current pot.
+    PotFraction(f32),
+    /// Move all-in.
+    AllIn,
+}
+
+/// Complete policy decision for diagnostics and tests.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BotDecision {
+    /// Public hand assessment.
+    pub assessment: HandAssessment,
+    /// Chosen action intent before final legality mapping.
+    pub intent: ActionIntent,
+    /// Chosen sizing family.
+    pub sizing: BetSizing,
+    /// Final legal action.
+    pub action: BetAction,
 }
 
 /// Stateless bot strategy driven by a [`BotProfile`].
@@ -173,85 +289,333 @@ impl HeuristicBot {
 
     /// Chooses one legal betting action from the supplied public context.
     pub fn choose_action(&self, context: &BotDecisionContext, rng: &mut impl Rng) -> BetAction {
-        let legal = context.legal_actions;
-        if legal.can_check() {
-            return self.choose_when_check_allowed(context, rng);
-        }
-        self.choose_when_facing_bet(context, rng)
+        self.decide(context, rng).action
     }
 
-    fn choose_when_check_allowed(
-        &self,
-        context: &BotDecisionContext,
-        rng: &mut impl Rng,
-    ) -> BetAction {
-        let score = self.action_score(context, rng);
-        let raise_threshold = 1.35 - (self.profile.aggression * 0.15);
-        if legal_raise_target(context.legal_actions).is_some()
-            && (score + self.profile.aggression + self.profile.bluff_rate) >= raise_threshold
-        {
-            return BetAction::RaiseTo(legal_raise_target(context.legal_actions).expect("checked"));
+    /// Builds the assessment, intent, sizing, and final legal action.
+    pub fn decide(&self, context: &BotDecisionContext, rng: &mut impl Rng) -> BotDecision {
+        let assessment = self.assess(context, rng);
+        let intent = self.intent(context, assessment);
+        let sizing = sizing(assessment, intent);
+        let action = map_to_legal_action(context, intent, sizing);
+        BotDecision {
+            assessment,
+            intent,
+            sizing,
+            action,
         }
-        BetAction::Check
     }
 
-    fn choose_when_facing_bet(
-        &self,
-        context: &BotDecisionContext,
-        rng: &mut impl Rng,
-    ) -> BetAction {
-        let score = self.action_score(context, rng);
-        let call_threshold = 0.68 - (self.profile.call_bias * 0.25);
-        if score < call_threshold {
-            return BetAction::Fold;
+    /// Assesses the public and local-private information available to the bot.
+    pub fn assess(&self, context: &BotDecisionContext, rng: &mut impl Rng) -> HandAssessment {
+        let (strength, category) = made_strength(context);
+        let draw_potential = draw_potential(context);
+        let pressure = decision_pressure(context);
+        let noise = rng.gen_range(-0.5..0.5) * self.profile.randomness;
+        let multiway_penalty = context.live_opponents.map_or_else(
+            || {
+                let opponents = context.player_count.saturating_sub(1);
+                scaled_count_penalty(opponents, 0.025)
+            },
+            |opponents| scaled_count_penalty(opponents, 0.030),
+        );
+        let looseness = (self.profile.looseness - 0.35) * 0.20;
+        let score =
+            clamp01(strength + draw_potential + looseness + noise - pressure - multiway_penalty);
+        HandAssessment {
+            strength,
+            category,
+            draw_potential,
+            pressure,
+            score,
         }
-        let raise_threshold =
-            1.45 + (self.profile.call_bias * 0.20) - (self.profile.aggression * 0.10);
-        if let Some(target) = legal_raise_target(context.legal_actions) {
-            if (score + self.profile.aggression - self.profile.call_bias)
-                >= raise_threshold + call_pressure(context.legal_actions)
-            {
-                return BetAction::RaiseTo(target);
-            }
-        }
-        BetAction::Call
     }
 
-    fn action_score(&self, context: &BotDecisionContext, rng: &mut impl Rng) -> f32 {
-        let base = match context.street {
-            Street::Preflop => {
-                context.hole_cards.map_or(0.45, preflop_score)
-                    + short_handed_bonus(context.player_count)
+    fn intent(&self, context: &BotDecisionContext, assessment: HandAssessment) -> ActionIntent {
+        if context.legal_actions.can_check() {
+            if should_bet(self.profile, context, assessment) {
+                if near_all_in(context, assessment) {
+                    return ActionIntent::AllIn;
+                }
+                return ActionIntent::Bet;
             }
-            Street::Flop | Street::Turn | Street::River => {
-                postflop_score(context.hole_cards, &context.board)
+            return ActionIntent::Check;
+        }
+
+        if should_fold(self.profile, context, assessment) {
+            return ActionIntent::Fold;
+        }
+        if should_raise(self.profile, context, assessment) {
+            if near_all_in(context, assessment) {
+                return ActionIntent::AllIn;
             }
-        };
-        base + self.profile.looseness + (rng.gen_range(-0.5..0.5) * self.profile.randomness)
-            - call_pressure(context.legal_actions)
+            return ActionIntent::Raise;
+        }
+        ActionIntent::Call
     }
 }
 
-fn legal_raise_target(legal: LegalActions) -> Option<Chips> {
-    legal
-        .minimum_raise_to()
-        .filter(|minimum| *minimum <= legal.maximum_raise_to())
+const fn sizing(assessment: HandAssessment, intent: ActionIntent) -> BetSizing {
+    match intent {
+        ActionIntent::Bet | ActionIntent::Raise => {
+            if assessment.score >= 0.88 {
+                BetSizing::PotFraction(0.75)
+            } else if assessment.score >= 0.68 {
+                BetSizing::PotFraction(0.50)
+            } else {
+                BetSizing::PotFraction(0.33)
+            }
+        }
+        ActionIntent::AllIn => BetSizing::AllIn,
+        ActionIntent::Fold | ActionIntent::Check | ActionIntent::Call => BetSizing::None,
+    }
 }
 
-fn call_pressure(legal: LegalActions) -> f32 {
-    if legal.to_call().is_zero() {
-        0.0
+fn should_bet(
+    profile: BotProfile,
+    context: &BotDecisionContext,
+    assessment: HandAssessment,
+) -> bool {
+    legal_raise_bounds(context.legal_actions).is_some()
+        && assessment.score + profile.aggression.mul_add(0.20, profile.bluff_rate * 0.10) >= 0.72
+}
+
+fn should_fold(
+    profile: BotProfile,
+    context: &BotDecisionContext,
+    assessment: HandAssessment,
+) -> bool {
+    let threshold = 0.47 - (profile.call_bias * 0.14) + call_cost_ratio(context) * 0.28;
+    assessment.score < threshold
+}
+
+fn should_raise(
+    profile: BotProfile,
+    context: &BotDecisionContext,
+    assessment: HandAssessment,
+) -> bool {
+    if legal_raise_bounds(context.legal_actions).is_none() {
+        return false;
+    }
+    let raise_depth = context.street_raise_count.unwrap_or(0);
+    let depth_penalty = f32::from(raise_depth) * 0.10;
+    let call_ratio_penalty = call_cost_ratio(context) * 0.20;
+    let threshold = 0.82 + depth_penalty + call_ratio_penalty - profile.aggression * 0.18;
+    assessment.score >= threshold
+        && (assessment.strength >= 0.72 || profile.bluff_rate > 0.18 && assessment.score >= 0.76)
+}
+
+fn near_all_in(context: &BotDecisionContext, assessment: HandAssessment) -> bool {
+    let Some(stack) = context.actor_stack else {
+        return false;
+    };
+    stack.units() <= 8 || assessment.score >= 0.94 && stack.units() <= 24
+}
+
+fn map_to_legal_action(
+    context: &BotDecisionContext,
+    intent: ActionIntent,
+    sizing: BetSizing,
+) -> BetAction {
+    match intent {
+        ActionIntent::Fold => BetAction::Fold,
+        ActionIntent::Check => {
+            if context.legal_actions.can_check() {
+                BetAction::Check
+            } else {
+                BetAction::Fold
+            }
+        }
+        ActionIntent::Call => BetAction::Call,
+        ActionIntent::Bet | ActionIntent::Raise => {
+            sized_raise(context, sizing).map_or(BetAction::Call, BetAction::RaiseTo)
+        }
+        ActionIntent::AllIn => {
+            if context.legal_actions.maximum_raise_to() > Chips::ZERO {
+                BetAction::AllIn
+            } else if context.legal_actions.can_check() {
+                BetAction::Check
+            } else {
+                BetAction::Call
+            }
+        }
+    }
+}
+
+fn sized_raise(context: &BotDecisionContext, sizing: BetSizing) -> Option<Chips> {
+    let (minimum, maximum) = legal_raise_bounds(context.legal_actions)?;
+    let target = match sizing {
+        BetSizing::PotFraction(fraction) => {
+            let pot = context.pot.map_or_else(
+                || {
+                    minimum
+                        .units()
+                        .saturating_add(default_raise_span(minimum, maximum))
+                },
+                Chips::units,
+            );
+            let desired = minimum.units().saturating_add(scale_units(pot, fraction));
+            Chips::from_units(desired)
+        }
+        BetSizing::AllIn => maximum,
+        BetSizing::None => minimum,
+    };
+    Some(clamp_chips(target, minimum, maximum))
+}
+
+fn legal_raise_bounds(legal: LegalActions) -> Option<(Chips, Chips)> {
+    let minimum = legal.minimum_raise_to()?;
+    let maximum = legal.maximum_raise_to();
+    (minimum <= maximum).then_some((minimum, maximum))
+}
+
+fn default_raise_span(minimum: Chips, maximum: Chips) -> u64 {
+    let span = maximum.units().saturating_sub(minimum.units());
+    span.clamp(2, 12)
+}
+
+fn scale_units(units: u64, fraction: f32) -> u64 {
+    let fraction = clamp01(fraction);
+    let scaled = if fraction <= 0.34 {
+        units.saturating_add(2) / 3
+    } else if fraction <= 0.51 {
+        units.saturating_add(1) / 2
     } else {
-        let capped_units =
-            u16::try_from(legal.to_call().units().min(35)).expect("capped call units fit in u16");
-        f32::from(capped_units) / 100.0
+        units.saturating_mul(3).saturating_add(2) / 4
+    };
+    scaled.max(1)
+}
+
+fn clamp_chips(value: Chips, minimum: Chips, maximum: Chips) -> Chips {
+    Chips::from_units(value.units().clamp(minimum.units(), maximum.units()))
+}
+
+fn made_strength(context: &BotDecisionContext) -> (f32, Option<HandCategory>) {
+    if context.street == Street::Preflop || context.board.len() < 3 {
+        return (context.hole_cards.map_or(0.45, preflop_score), None);
+    }
+    let Some(hole_cards) = context.hole_cards else {
+        return (0.45, None);
+    };
+    let mut cards = Vec::with_capacity(hole_cards.len() + context.board.len());
+    cards.extend_from_slice(&hole_cards);
+    cards.extend_from_slice(&context.board);
+    if let Ok(value) = mtholdem::card::evaluate_best(&cards) {
+        let category = value.category();
+        return (category_strength(category, context.street), Some(category));
+    }
+    (0.45, None)
+}
+
+fn category_strength(category: HandCategory, street: Street) -> f32 {
+    match category {
+        HandCategory::HighCard => {
+            if street == Street::River {
+                0.22
+            } else {
+                0.34
+            }
+        }
+        HandCategory::OnePair => {
+            if street == Street::River {
+                0.46
+            } else {
+                0.52
+            }
+        }
+        HandCategory::TwoPair => 0.70,
+        HandCategory::ThreeOfAKind => 0.80,
+        HandCategory::Straight | HandCategory::Flush => 0.88,
+        HandCategory::FullHouse => 0.94,
+        HandCategory::FourOfAKind | HandCategory::StraightFlush => 1.0,
     }
 }
 
-fn short_handed_bonus(player_count: usize) -> f32 {
-    let missing = 9_usize.saturating_sub(player_count.min(9));
-    let missing = u8::try_from(missing).expect("missing seats are capped below nine");
-    f32::from(missing) * 0.04
+fn draw_potential(context: &BotDecisionContext) -> f32 {
+    if matches!(context.street, Street::Preflop | Street::River) || context.board.len() < 3 {
+        return 0.0;
+    }
+    let Some(hole_cards) = context.hole_cards else {
+        return 0.0;
+    };
+    let mut cards = Vec::with_capacity(hole_cards.len() + context.board.len());
+    cards.extend_from_slice(&hole_cards);
+    cards.extend_from_slice(&context.board);
+    let suited = suit_count_potential(&cards);
+    let straight = straight_potential(&cards);
+    let overcards = overcard_potential(hole_cards, &context.board);
+    (suited + straight + overcards).min(0.18)
+}
+
+fn suit_count_potential(cards: &[Card]) -> f32 {
+    let mut counts = [0_u8; 4];
+    for card in cards {
+        counts[card.suit() as usize] += 1;
+    }
+    match counts.into_iter().max().unwrap_or(0) {
+        4 => 0.10,
+        5.. => 0.14,
+        _ => 0.0,
+    }
+}
+
+fn straight_potential(cards: &[Card]) -> f32 {
+    let mut ranks = [false; 15];
+    for card in cards {
+        let value = usize::from(card.rank().value());
+        ranks[value] = true;
+        if value == 14 {
+            ranks[1] = true;
+        }
+    }
+    let best_window = (1..=10)
+        .map(|start| (start..start + 5).filter(|rank| ranks[*rank]).count())
+        .max()
+        .unwrap_or(0);
+    if best_window >= 4 { 0.08 } else { 0.0 }
+}
+
+fn overcard_potential(hole_cards: [Card; 2], board: &[Card]) -> f32 {
+    let Some(board_high) = board.iter().map(|card| card.rank().value()).max() else {
+        return 0.0;
+    };
+    let overcards = hole_cards
+        .into_iter()
+        .filter(|card| card.rank().value() > board_high)
+        .count();
+    if overcards == 2 { 0.04 } else { 0.0 }
+}
+
+fn decision_pressure(context: &BotDecisionContext) -> f32 {
+    let mut pressure = call_cost_ratio(context) * 0.45;
+    if context.legal_actions.to_call().units() >= 20 {
+        pressure += 0.08;
+    }
+    pressure
+}
+
+fn call_cost_ratio(context: &BotDecisionContext) -> f32 {
+    let to_call = context.legal_actions.to_call().units();
+    if to_call == 0 {
+        return 0.0;
+    }
+    if let Some(pot) = context.pot {
+        let denominator = pot.units().saturating_add(to_call).max(1);
+        return capped_ratio(to_call, denominator);
+    }
+    let denominator = context.actor_stack.map_or(100, Chips::units).max(1);
+    capped_ratio(to_call, denominator)
+}
+
+fn capped_ratio(numerator: u64, denominator: u64) -> f32 {
+    let numerator = u16::try_from(numerator.min(10_000)).expect("ratio numerator is capped");
+    let denominator = u16::try_from(denominator.min(10_000)).expect("ratio denominator is capped");
+    f32::from(numerator) / f32::from(denominator.max(1))
+}
+
+fn scaled_count_penalty(count: usize, unit: f32) -> f32 {
+    let count = u8::try_from(count.min(9)).expect("count is capped below ten");
+    f32::from(count.saturating_sub(1)) * unit
 }
 
 fn preflop_score(cards: [Card; 2]) -> f32 {
@@ -263,55 +627,29 @@ fn preflop_score(cards: [Card; 2]) -> f32 {
     if high == low {
         return match high {
             14 => 1.00,
-            13 => 0.97,
-            12 => 0.94,
-            11 => 0.86,
-            10 | 9 => 0.78,
-            8 | 7 => 0.68,
-            2..=6 => 0.58,
-            _ => 0.50,
+            13 => 0.96,
+            12 => 0.91,
+            11 => 0.82,
+            10 | 9 => 0.72,
+            8 | 7 => 0.62,
+            2..=6 => 0.50,
+            _ => 0.45,
         };
     }
-    let mut score = (f32::from(high) / 14.0) * 0.45 + (f32::from(low) / 14.0) * 0.20;
+    let mut score = (f32::from(high) / 14.0) * 0.42 + (f32::from(low) / 14.0) * 0.18;
     if high == 14 {
-        score += 0.15;
+        score += 0.12;
     }
     if broadway(high) && broadway(low) {
-        score += 0.18;
+        score += 0.16;
     }
     if suited {
-        score += 0.08;
+        score += 0.06;
     }
     if high - low <= 2 {
-        score += 0.07;
+        score += 0.05;
     }
-    score.min(0.92)
-}
-
-fn postflop_score(hole_cards: Option<[Card; 2]>, board: &[Card]) -> f32 {
-    let Some(hole_cards) = hole_cards else {
-        return 0.45;
-    };
-    if board.len() < 3 {
-        return preflop_score(hole_cards);
-    }
-    let mut cards = Vec::with_capacity(hole_cards.len() + board.len());
-    cards.extend_from_slice(&hole_cards);
-    cards.extend_from_slice(board);
-    if cards.len() >= 5 {
-        if let Ok(value) = mtholdem::card::evaluate_best(&cards) {
-            return match value.category() {
-                mtholdem::HandCategory::HighCard => 0.35,
-                mtholdem::HandCategory::OnePair => 0.52,
-                mtholdem::HandCategory::TwoPair => 0.68,
-                mtholdem::HandCategory::ThreeOfAKind => 0.78,
-                mtholdem::HandCategory::Straight | mtholdem::HandCategory::Flush => 0.86,
-                mtholdem::HandCategory::FullHouse => 0.93,
-                mtholdem::HandCategory::FourOfAKind | mtholdem::HandCategory::StraightFlush => 1.0,
-            };
-        }
-    }
-    0.45
+    score.min(0.88)
 }
 
 const fn broadway(rank: u8) -> bool {
@@ -332,8 +670,20 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
-    fn legal(to_call: u64, minimum_raise_to: Option<u64>, maximum_raise_to: u64) -> LegalActions {
-        // Exercise the public betting API to obtain a real LegalActions value.
+    fn preflop_legal() -> LegalActions {
+        let stacks = [Chips::from_units(100), Chips::from_units(100)];
+        let hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("seat"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        hand.legal_actions().expect("preflop legal")
+    }
+
+    fn open_bet_legal() -> LegalActions {
         let stacks = [Chips::from_units(100), Chips::from_units(100)];
         let mut hand = mtholdem::holdem::HoldemHand::new(
             &stacks,
@@ -343,24 +693,17 @@ mod tests {
             Chips::from_units(100),
         )
         .expect("hand");
-        if to_call == 0 {
-            hand.apply_action(Seat::new(0).expect("seat"), BetAction::Call)
-                .expect("call");
-            hand.apply_action(Seat::new(1).expect("seat"), BetAction::Check)
-                .expect("check");
-            hand.open_flop([
-                Card::new(Rank::Two, mtholdem::Suit::Clubs),
-                Card::new(Rank::Seven, mtholdem::Suit::Diamonds),
-                Card::new(Rank::Nine, mtholdem::Suit::Hearts),
-            ])
-            .expect("open flop");
-            return hand.legal_actions().expect("postflop legal");
-        }
-        let legal = hand.legal_actions().expect("preflop legal");
-        assert_eq!(legal.to_call().units(), to_call);
-        assert_eq!(legal.minimum_raise_to().map(Chips::units), minimum_raise_to);
-        assert_eq!(legal.maximum_raise_to().units(), maximum_raise_to);
-        legal
+        hand.apply_action(Seat::new(0).expect("seat"), BetAction::Call)
+            .expect("call");
+        hand.apply_action(Seat::new(1).expect("seat"), BetAction::Check)
+            .expect("check");
+        hand.open_flop([
+            Card::new(Rank::Two, mtholdem::Suit::Clubs),
+            Card::new(Rank::Seven, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Nine, mtholdem::Suit::Hearts),
+        ])
+        .expect("open flop");
+        hand.legal_actions().expect("postflop legal")
     }
 
     #[test]
@@ -388,8 +731,9 @@ mod tests {
             2,
             Seat::new(0).expect("seat"),
             Street::Flop,
-            legal(0, Some(2), 100),
-        );
+            open_bet_legal(),
+        )
+        .with_pot(Chips::from_units(4));
         let mut rng = StdRng::seed_from_u64(7);
         for _ in 0..100 {
             assert!(!matches!(
@@ -406,13 +750,39 @@ mod tests {
             9,
             Seat::new(0).expect("seat"),
             Street::Preflop,
-            legal(1, Some(4), 100),
+            preflop_legal(),
         )
         .with_hole_cards(Some([
             Card::new(Rank::Seven, mtholdem::Suit::Clubs),
             Card::new(Rank::Two, mtholdem::Suit::Diamonds),
-        ]));
+        ]))
+        .with_pot(Chips::from_units(3))
+        .with_actor_stack(Chips::from_units(99));
         let mut rng = StdRng::seed_from_u64(1);
         assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Fold);
+    }
+
+    #[test]
+    fn strong_open_bets_use_more_than_the_minimum() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            2,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Ace, mtholdem::Suit::Hearts),
+            Card::new(Rank::Seven, mtholdem::Suit::Clubs),
+            Card::new(Rank::Two, mtholdem::Suit::Spades),
+        ])
+        .with_pot(Chips::from_units(4));
+        let mut rng = StdRng::seed_from_u64(1);
+        let action = bot.choose_action(&context, &mut rng);
+        assert!(matches!(action, BetAction::RaiseTo(amount) if amount.units() > 2));
     }
 }

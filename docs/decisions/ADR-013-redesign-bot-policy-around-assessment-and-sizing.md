@@ -120,11 +120,14 @@ opponent profile.
   the product's baseline opponent.
 
 ## Consequences
-- The next bot implementation should be a rewrite of the policy pipeline, not
-  a sequence of ad hoc min-raise suppressions.
-- The table runner must expose richer context to bot decisions.
-- Postflop assessment may spend bounded CPU time on Monte Carlo equity, so
-  profiles or runners should be able to tune trial counts later.
+- The first rewrite exposes assessment, intent, and sizing stages instead of
+  extending the min-raise heuristic.
+- Table runners should expose richer context to bot decisions where available.
+  The CLI rules-only backend now supplies pot, stack, contribution, and live
+  opponent context; peer-backed host loops should supply equivalent public facts
+  when the peer effect stream exposes them.
+- Postflop assessment may later spend bounded CPU time on Monte Carlo equity,
+  so profiles or runners should be able to tune trial counts then.
 - CLI and future Godot single-player can surface bot debug information such as
   assessment, intent, and sizing without depending on protocol internals.
 - Existing bot presets may keep their names, but their parameters should map to

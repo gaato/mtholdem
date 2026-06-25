@@ -24,7 +24,7 @@ API documentation for `main`: <https://gaato.github.io/mtholdem/>
 | [`mtholdem`](crates/mtholdem) | No-limit Texas Hold'em rules, signed wire artifacts, transcripts, checkpoints, recovery evidence, and settlement-facing state |
 | [`mtholdem-peer`](crates/mtholdem-peer) | Transport-neutral peer-session orchestration |
 | [`mtholdem-adapter`](crates/mtholdem-adapter) | Byte-oriented boundary shared by CLI, C ABI, and downstream WASM packages |
-| [`mtholdem-bot`](crates/mtholdem-bot) | Host-side heuristic bot policy for demos and single-player shells |
+| [`mtholdem-bot`](crates/mtholdem-bot) | Host-side bot policy for demos and single-player shells |
 | [`mtholdem-table`](crates/mtholdem-table) | Host-side table event vocabulary for CLI, C ABI, Godot, WASM, and tests |
 | [`mtholdem-ffi`](crates/mtholdem-ffi) | C ABI with opaque handles, ABI versioning, error codes, and caller-owned buffers |
 | [`mtholdem-cli`](crates/mtholdem-cli) | Scriptable command-line entrypoint |

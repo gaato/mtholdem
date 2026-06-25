@@ -163,9 +163,9 @@ wire artifacts, validate transcripts, or expose a C ABI surface. CLI and future
 single-player shells may use it to answer `RequestAction` effects while keeping
 the peer/session loop in the host. See
 [ADR-010](decisions/ADR-010-keep-bot-policy-host-side.md) for the single-player
-and human-input boundary. The bot policy itself is still pre-stable and should
-be redesigned around assessment, intent, and sizing rather than patched around
-the initial min-raise heuristic; see
+and human-input boundary. The bot policy is pre-stable and now exposes
+assessment, intent, and sizing stages; bounded Monte Carlo equity can be added
+inside that assessment stage later. See
 [ADR-013](decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
 
 Multi-hand table/session running is also host-side orchestration. Stack
@@ -198,8 +198,7 @@ participation protocol.
 - `mtholdem-peer`: transport-neutral peer-session orchestration.
 - `mtholdem-adapter`: the byte/event/action/error/status boundary shared by
   target wrappers.
-- `mtholdem-bot`: host-side heuristic action policy for demos and
-  single-player shells.
+- `mtholdem-bot`: host-side action policy for demos and single-player shells.
 - `mtholdem-table`: host-side table event vocabulary for local runners, CLI,
   C ABI planning, Godot wrappers, WASM, and tests.
 - `mtholdem-cli`: the scriptable CLI wrapper.
