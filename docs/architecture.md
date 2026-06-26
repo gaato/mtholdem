@@ -180,11 +180,13 @@ use it only when answering `HostEffect::RequestAction`. The current policy is st
 the long-term diagnostic model is classic poker situation and motive vocabulary
 rather than one opaque scalar. Current numeric evidence such
 as equity, hand class, draw material, pot odds, and pressure should feed named
-motives such as value, protection, bluff, semi-bluff, pot-odds call, showdown
-value, and pressure fold.
+motives such as value, protection, bluff, semi-bluff, defend, pot-odds call,
+showdown value, and pressure fold. `category` reports the best poker hand;
+`holding` reports how the private hand contributes to that category, such as
+board-pair-only, top-pair kicker quality, or overpair.
 Peer-backed and rules-only hosts should feed it the same public action context
 so decisions do not depend on backend internals. See
-[ADR-018](decisions/ADR-018-reframe-bot-policy-around-classic-poker-motives.md),
+[ADR-018](decisions/ADR-018-reframe-bot-policy-around-classic-poker-motives.md)
 and [ADR-015](decisions/ADR-015-include-public-action-context-in-action-requests.md).
 The opponent-quality target remains a range-aware Monte Carlo heuristic, not a
 solver or self-play system; see

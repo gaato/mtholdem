@@ -20,13 +20,14 @@ use rand::seq::SliceRandom;
 const DEFAULT_PLAYERS: usize = 3;
 const DEFAULT_SEED: u64 = 7;
 const MAX_STEPS: usize = 20_000;
-const MOTIVE_COUNT: usize = 13;
+const MOTIVE_COUNT: usize = 14;
 const MOTIVE_LABELS: [&str; MOTIVE_COUNT] = [
     "value",
     "protection",
     "bluff",
     "semi-bluff",
     "pot-odds-call",
+    "defend",
     "showdown-value",
     "steal",
     "isolation",
@@ -1888,14 +1889,15 @@ const fn motive_index(motive: BettingMotive) -> usize {
         BettingMotive::Bluff => 2,
         BettingMotive::SemiBluff => 3,
         BettingMotive::PotOddsCall => 4,
-        BettingMotive::ShowdownValue => 5,
-        BettingMotive::Steal => 6,
-        BettingMotive::Isolation => 7,
-        BettingMotive::GapFold => 8,
-        BettingMotive::PressureFold => 9,
-        BettingMotive::GiveUp => 10,
-        BettingMotive::FreeCard => 11,
-        BettingMotive::AllInPressure => 12,
+        BettingMotive::Defend => 5,
+        BettingMotive::ShowdownValue => 6,
+        BettingMotive::Steal => 7,
+        BettingMotive::Isolation => 8,
+        BettingMotive::GapFold => 9,
+        BettingMotive::PressureFold => 10,
+        BettingMotive::GiveUp => 11,
+        BettingMotive::FreeCard => 12,
+        BettingMotive::AllInPressure => 13,
     }
 }
 
@@ -2530,10 +2532,9 @@ mod tests {
         assert!(output.contains("turn barrel stats:"));
         assert!(output.contains("turn barrel by dealt players:"));
         assert!(output.contains("bot motive stats:"));
-        assert!(
-            output
-                .contains("actions value protection bluff semi-bluff pot-odds-call showdown-value")
-        );
+        assert!(output.contains(
+            "actions value protection bluff semi-bluff pot-odds-call defend showdown-value"
+        ));
         assert!(output.contains("bot motive by dealt players:"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));

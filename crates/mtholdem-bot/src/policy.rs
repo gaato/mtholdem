@@ -143,7 +143,7 @@ impl HeuristicBot {
                 if hand_value >= range_floor + 0.03 {
                     Some(BettingMotive::Isolation)
                 } else if hand_value >= range_floor - 0.16 {
-                    Some(BettingMotive::PotOddsCall)
+                    Some(BettingMotive::Defend)
                 } else {
                     Some(BettingMotive::GiveUp)
                 }
@@ -164,8 +164,10 @@ impl HeuristicBot {
                 let raise_floor = value_reraise_floor(self.profile, context);
                 if hand_value >= raise_floor {
                     Some(BettingMotive::Value)
-                } else if hand_value >= call_floor {
-                    Some(BettingMotive::PotOddsCall)
+                } else if hand_value >= call_floor
+                    && !dominated_preflop_pressure(context, hand_value)
+                {
+                    Some(BettingMotive::Defend)
                 } else {
                     Some(BettingMotive::GapFold)
                 }
@@ -185,12 +187,14 @@ impl HeuristicBot {
                 }
                 return aggressive_motive(approximation);
             }
-            return if approximation.evidence.holding == HoldingClass::HighCard
+            return if approximation.evidence.holding == HoldingClass::Air
                 && approximation.evidence.draw == DrawClass::None
             {
                 BettingMotive::GiveUp
-            } else {
+            } else if has_showdown_value(approximation) {
                 BettingMotive::ShowdownValue
+            } else {
+                BettingMotive::FreeCard
             };
         }
 
@@ -207,10 +211,14 @@ impl HeuristicBot {
             }
             return aggressive_motive(approximation);
         }
-        if approximation.evidence.pot_odds_class == PotOddsClass::GoodPrice {
+        if approximation.evidence.pot_odds_class == PotOddsClass::GoodPrice
+            && has_draw_or_showdown_value(approximation)
+        {
             BettingMotive::PotOddsCall
-        } else {
+        } else if has_showdown_value(approximation) {
             BettingMotive::ShowdownValue
+        } else {
+            BettingMotive::GiveUp
         }
     }
 }
@@ -294,6 +302,44 @@ fn value_reraise_floor(profile: BotProfile, context: &BotDecisionContext) -> f32
         + depth_penalty
         + raise_size_cost(context))
     .clamp(0.68, 0.99)
+}
+
+fn dominated_preflop_pressure(context: &BotDecisionContext, hand_value: f32) -> bool {
+    if hand_value >= 0.92 {
+        return false;
+    }
+    let Some(hole_cards) = context.hole_cards else {
+        return false;
+    };
+    let raise_depth = context.street_raise_count.unwrap_or(1).saturating_sub(1);
+    let full_ring = dealt_player_count(context) >= 6;
+    let multiway =
+        context.matched_bet_opponents.unwrap_or(1) > 1 || context.live_opponents.unwrap_or(1) > 1;
+    let not_closing = action_closure(context) == ActionClosure::NotClosing;
+    if raise_depth > 0 || full_ring && not_closing || full_ring && multiway {
+        return dominated_offsuit_broadway(hole_cards);
+    }
+    not_closing && multiway && weak_offsuit_gap(hole_cards)
+}
+
+fn dominated_offsuit_broadway(cards: [Card; 2]) -> bool {
+    if cards[0].rank() == cards[1].rank() || cards[0].suit() == cards[1].suit() {
+        return false;
+    }
+    let high = cards[0].rank().value().max(cards[1].rank().value());
+    let low = cards[0].rank().value().min(cards[1].rank().value());
+    high == Rank::Ace.value() && low <= Rank::Jack.value()
+        || high == Rank::King.value() && (Rank::Ten.value()..=Rank::Queen.value()).contains(&low)
+        || high == Rank::Queen.value() && low >= Rank::Ten.value()
+}
+
+fn weak_offsuit_gap(cards: [Card; 2]) -> bool {
+    if cards[0].rank() == cards[1].rank() || cards[0].suit() == cards[1].suit() {
+        return false;
+    }
+    let high = cards[0].rank().value().max(cards[1].rank().value());
+    let low = cards[0].rank().value().min(cards[1].rank().value());
+    high <= Rank::Jack.value() && high.saturating_sub(low) >= 2
 }
 
 fn raise_size_cost(context: &BotDecisionContext) -> f32 {
@@ -450,6 +496,7 @@ fn sizing(
         }
         BettingMotive::AllInPressure => SizingFamily::AllIn,
         BettingMotive::PotOddsCall
+        | BettingMotive::Defend
         | BettingMotive::ShowdownValue
         | BettingMotive::GapFold
         | BettingMotive::PressureFold
@@ -463,6 +510,17 @@ fn can_apply_aggressive_motive(
     context: &BotDecisionContext,
     approximation: TheoremApproximation,
 ) -> bool {
+    if high_reverse_implied_pressure(approximation)
+        && matches!(
+            approximation.evidence.holding,
+            HoldingClass::BoardPairOnly
+                | HoldingClass::WeakPair
+                | HoldingClass::TopPairWeakKicker
+                | HoldingClass::TopPairGoodKicker
+        )
+    {
+        return false;
+    }
     let initiative_bonus = postflop_initiative_bonus(context);
     legal_raise_bounds(context.legal_actions).is_some()
         && approximation.ev_proxy
@@ -533,14 +591,60 @@ fn aggressive_motive(approximation: TheoremApproximation) -> BettingMotive {
     }
     if matches!(
         approximation.evidence.holding,
-        HoldingClass::StrongMade | HoldingClass::PremiumMade
+        HoldingClass::TwoPairOrTrips | HoldingClass::PremiumMade
     ) {
         return BettingMotive::Value;
     }
-    if approximation.evidence.holding == HoldingClass::Pair && approximation.cost_pressure < 0.16 {
+    if matches!(
+        approximation.evidence.holding,
+        HoldingClass::OverPair | HoldingClass::TopPairGoodKicker
+    ) && approximation.cost_pressure < 0.16
+        && !high_reverse_implied_pressure(approximation)
+    {
         return BettingMotive::Protection;
     }
     BettingMotive::Bluff
+}
+
+fn has_draw_or_showdown_value(approximation: TheoremApproximation) -> bool {
+    approximation.evidence.draw != DrawClass::None || has_showdown_value(approximation)
+}
+
+fn has_showdown_value(approximation: TheoremApproximation) -> bool {
+    match approximation.evidence.holding {
+        HoldingClass::Unknown | HoldingClass::Preflop | HoldingClass::Air => false,
+        HoldingClass::Overcards => approximation
+            .evidence
+            .equity
+            .is_some_and(|equity| equity >= 0.55),
+        HoldingClass::BoardPairOnly => approximation
+            .evidence
+            .equity
+            .is_some_and(|equity| equity >= 0.45),
+        HoldingClass::WeakPair
+        | HoldingClass::TopPairWeakKicker
+        | HoldingClass::TopPairGoodKicker
+        | HoldingClass::OverPair
+        | HoldingClass::TwoPairOrTrips
+        | HoldingClass::PremiumMade => true,
+    }
+}
+
+fn high_reverse_implied_pressure(approximation: TheoremApproximation) -> bool {
+    matches!(
+        approximation.situation.opponents,
+        OpponentCountClass::Multiway
+    ) && (matches!(
+        approximation.evidence.opponent_range,
+        OpponentRangeClass::Continuing | OpponentRangeClass::Tight
+    ) || approximation.situation.initiative == InitiativeState::NoInitiative)
+        || approximation.evidence.pressure == PressureClass::High
+            && matches!(
+                approximation.evidence.holding,
+                HoldingClass::BoardPairOnly
+                    | HoldingClass::WeakPair
+                    | HoldingClass::TopPairWeakKicker
+            )
 }
 
 fn map_to_legal_action(
@@ -557,7 +661,7 @@ fn map_to_legal_action(
                 BetAction::Fold
             }
         }
-        BettingMotive::PotOddsCall | BettingMotive::ShowdownValue => {
+        BettingMotive::PotOddsCall | BettingMotive::Defend | BettingMotive::ShowdownValue => {
             if context.legal_actions.can_check() {
                 BetAction::Check
             } else {
@@ -693,16 +797,22 @@ fn category_strength(category: HandCategory, street: Street) -> f32 {
 }
 
 fn holding_class(context: &BotDecisionContext, category: Option<HandCategory>) -> HoldingClass {
-    if context.hole_cards.is_none() {
+    let Some(hole_cards) = context.hole_cards else {
         return HoldingClass::Unknown;
-    }
+    };
     if context.street == Street::Preflop || context.board.len() < 3 {
         return HoldingClass::Preflop;
     }
     match category {
-        Some(HandCategory::HighCard) => HoldingClass::HighCard,
-        Some(HandCategory::OnePair) => HoldingClass::Pair,
-        Some(HandCategory::TwoPair | HandCategory::ThreeOfAKind) => HoldingClass::StrongMade,
+        Some(HandCategory::HighCard) => {
+            if overcard_count(hole_cards, &context.board) > 0 {
+                HoldingClass::Overcards
+            } else {
+                HoldingClass::Air
+            }
+        }
+        Some(HandCategory::OnePair) => one_pair_holding(hole_cards, &context.board),
+        Some(HandCategory::TwoPair | HandCategory::ThreeOfAKind) => HoldingClass::TwoPairOrTrips,
         Some(
             HandCategory::Straight
             | HandCategory::Flush
@@ -712,6 +822,55 @@ fn holding_class(context: &BotDecisionContext, category: Option<HandCategory>) -
         ) => HoldingClass::PremiumMade,
         None => HoldingClass::Unknown,
     }
+}
+
+fn one_pair_holding(hole_cards: [Card; 2], board: &[Card]) -> HoldingClass {
+    let [first, second] = hole_cards;
+    let first_rank = first.rank().value();
+    let second_rank = second.rank().value();
+    let board_high = board_high_rank(board).unwrap_or(0);
+    if first_rank == second_rank {
+        return if first_rank > board_high {
+            HoldingClass::OverPair
+        } else {
+            HoldingClass::WeakPair
+        };
+    }
+    let first_pairs_board = board_contains_rank(board, first_rank);
+    let second_pairs_board = board_contains_rank(board, second_rank);
+    match (first_pairs_board, second_pairs_board) {
+        (true, true) => HoldingClass::TwoPairOrTrips,
+        (false, false) => HoldingClass::BoardPairOnly,
+        (true, false) => paired_hole_card_class(first_rank, second_rank, board_high),
+        (false, true) => paired_hole_card_class(second_rank, first_rank, board_high),
+    }
+}
+
+fn paired_hole_card_class(pair_rank: u8, kicker_rank: u8, board_high: u8) -> HoldingClass {
+    if pair_rank != board_high {
+        return HoldingClass::WeakPair;
+    }
+    if good_top_pair_kicker(pair_rank, kicker_rank) {
+        HoldingClass::TopPairGoodKicker
+    } else {
+        HoldingClass::TopPairWeakKicker
+    }
+}
+
+fn good_top_pair_kicker(pair_rank: u8, kicker_rank: u8) -> bool {
+    match pair_rank {
+        14 => kicker_rank >= Rank::Queen.value(),
+        13 => kicker_rank >= Rank::Jack.value(),
+        _ => kicker_rank >= Rank::Ten.value(),
+    }
+}
+
+fn board_high_rank(board: &[Card]) -> Option<u8> {
+    board.iter().map(|card| card.rank().value()).max()
+}
+
+fn board_contains_rank(board: &[Card], rank: u8) -> bool {
+    board.iter().any(|card| card.rank().value() == rank)
 }
 
 fn draw_class(context: &BotDecisionContext) -> DrawClass {
@@ -1419,6 +1578,90 @@ mod tests {
         .with_action_context(hand.action_context().expect("context"))
     }
 
+    fn full_ring_big_blind_facing_three_bet_context() -> BotDecisionContext {
+        let stacks = [Chips::from_units(100); 8];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(6).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        for index in [1, 2] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Fold)
+                .expect("fold");
+        }
+        hand.apply_action(
+            Seat::new(3).expect("opener"),
+            BetAction::RaiseTo(Chips::from_units(6)),
+        )
+        .expect("open");
+        hand.apply_action(
+            Seat::new(4).expect("three-bettor"),
+            BetAction::RaiseTo(Chips::from_units(15)),
+        )
+        .expect("three-bet");
+        for index in [5, 6, 7] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Fold)
+                .expect("fold");
+        }
+        let actor = Seat::new(0).expect("big blind");
+        assert_eq!(hand.next_to_act(), Some(actor));
+        BotDecisionContext::new(
+            8,
+            actor,
+            Street::Preflop,
+            hand.legal_actions().expect("legal"),
+        )
+        .with_action_context(hand.action_context().expect("context"))
+    }
+
+    fn full_ring_ajo_multiway_three_bet_flop_context() -> BotDecisionContext {
+        let stacks = [Chips::from_units(100); 8];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(6).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        for index in [1, 2] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Fold)
+                .expect("fold");
+        }
+        hand.apply_action(
+            Seat::new(3).expect("opener"),
+            BetAction::RaiseTo(Chips::from_units(6)),
+        )
+        .expect("open");
+        hand.apply_action(
+            Seat::new(4).expect("three-bettor"),
+            BetAction::RaiseTo(Chips::from_units(15)),
+        )
+        .expect("three-bet");
+        for index in [5, 6, 7] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Fold)
+                .expect("fold");
+        }
+        hand.apply_action(Seat::new(0).expect("big blind"), BetAction::Call)
+            .expect("big blind call");
+        hand.apply_action(Seat::new(3).expect("opener"), BetAction::Call)
+            .expect("opener call");
+        let flop = [
+            Card::new(Rank::Ace, Suit::Hearts),
+            Card::new(Rank::Three, Suit::Spades),
+            Card::new(Rank::Two, Suit::Clubs),
+        ];
+        hand.open_flop(flop).expect("open flop");
+        let actor = Seat::new(0).expect("big blind");
+        assert_eq!(hand.next_to_act(), Some(actor));
+        BotDecisionContext::new(8, actor, Street::Flop, hand.legal_actions().expect("legal"))
+            .with_action_context(hand.action_context().expect("context"))
+            .with_board(flop)
+    }
+
     fn unopened_small_blind_context() -> BotDecisionContext {
         let stacks = [Chips::from_units(100); 8];
         let mut hand = mtholdem::holdem::HoldemHand::new(
@@ -1725,6 +1968,20 @@ mod tests {
     }
 
     #[test]
+    fn balanced_bot_folds_dominated_offsuit_broadway_full_ring_cold_call() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_cold_call_facing_open_context().with_hole_cards(Some([
+            Card::new(Rank::King, Suit::Hearts),
+            Card::new(Rank::Queen, Suit::Clubs),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_eq!(decision.action, BetAction::Fold, "{decision:?}");
+        assert_eq!(decision.motive, BettingMotive::GapFold);
+    }
+
+    #[test]
     fn balanced_bot_folds_broadway_full_ring_cold_call_against_three_bet() {
         let bot = HeuristicBot::from_preset(BotPreset::Balanced);
         let context = full_ring_cold_call_facing_three_bet_context().with_hole_cards(Some([
@@ -1734,6 +1991,49 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
 
         assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Fold);
+    }
+
+    #[test]
+    fn balanced_bot_folds_offsuit_ace_jack_against_full_ring_three_bet() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_big_blind_facing_three_bet_context().with_hole_cards(Some([
+            Card::new(Rank::Ace, Suit::Diamonds),
+            Card::new(Rank::Jack, Suit::Spades),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_eq!(decision.action, BetAction::Fold, "{decision:?}");
+        assert_eq!(decision.motive, BettingMotive::GapFold);
+    }
+
+    #[test]
+    fn balanced_bot_folds_weak_offsuit_gap_when_blind_defense_is_not_closing() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            3,
+            Seat::new(0).expect("big blind"),
+            Street::Preflop,
+            full_ring_big_blind_facing_open_context().legal_actions,
+        )
+        .with_dealt_player_count(3)
+        .with_hole_cards(Some([
+            Card::new(Rank::Jack, Suit::Clubs),
+            Card::new(Rank::Nine, Suit::Spades),
+        ]))
+        .with_pot(Chips::from_units(9))
+        .with_actor_stack(Chips::from_units(94))
+        .with_actor_street_contributed(Chips::from_units(2))
+        .with_live_opponents(2)
+        .with_matched_bet_opponents(1)
+        .with_big_blind(Chips::from_units(2))
+        .with_current_bet(Chips::from_units(6))
+        .with_street_raise_count(1);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_eq!(decision.action, BetAction::Fold, "{decision:?}");
+        assert_eq!(decision.motive, BettingMotive::GapFold);
     }
 
     #[test]
@@ -1858,6 +2158,79 @@ mod tests {
     }
 
     #[test]
+    fn board_pair_only_is_not_treated_as_a_hole_card_pair() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            3,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, Suit::Clubs),
+            Card::new(Rank::King, Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Seven, Suit::Diamonds),
+            Card::new(Rank::Seven, Suit::Spades),
+            Card::new(Rank::Four, Suit::Clubs),
+        ])
+        .with_pot(Chips::from_units(46))
+        .with_live_opponents(2)
+        .with_postflop_initiative(true);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_eq!(decision.input.evidence.holding, HoldingClass::BoardPairOnly);
+        assert_eq!(decision.action, BetAction::Check, "{decision:?}");
+    }
+
+    #[test]
+    fn weak_high_card_check_uses_free_card_not_showdown_value() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            3,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, Suit::Hearts),
+            Card::new(Rank::Two, Suit::Hearts),
+        ]))
+        .with_board([
+            Card::new(Rank::King, Suit::Spades),
+            Card::new(Rank::Queen, Suit::Diamonds),
+            Card::new(Rank::Nine, Suit::Spades),
+        ])
+        .with_pot(Chips::from_units(18))
+        .with_live_opponents(2);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_eq!(decision.action, BetAction::Check, "{decision:?}");
+        assert_ne!(decision.motive, BettingMotive::ShowdownValue);
+    }
+
+    #[test]
+    fn top_pair_weak_kicker_does_not_protection_bet_multiway_three_bet_pot() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_ajo_multiway_three_bet_flop_context().with_hole_cards(Some([
+            Card::new(Rank::Ace, Suit::Diamonds),
+            Card::new(Rank::Jack, Suit::Spades),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_eq!(
+            decision.input.evidence.holding,
+            HoldingClass::TopPairWeakKicker
+        );
+        assert_ne!(decision.motive, BettingMotive::Protection);
+        assert_eq!(decision.action, BetAction::Check, "{decision:?}");
+    }
+
+    #[test]
     fn balanced_bot_continues_with_showdown_pair_against_small_bet() {
         let bot = HeuristicBot::from_preset(BotPreset::Balanced);
         let context = heads_up_facing_flop_bet_context(
@@ -1959,7 +2332,10 @@ mod tests {
             decision.input.situation.betting_spot,
             BettingSpot::FacingRaise
         );
-        assert_eq!(decision.input.evidence.holding, HoldingClass::StrongMade);
+        assert_eq!(
+            decision.input.evidence.holding,
+            HoldingClass::TwoPairOrTrips
+        );
         assert_eq!(decision.motive, BettingMotive::Value);
     }
 

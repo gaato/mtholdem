@@ -122,12 +122,22 @@ pub enum HoldingClass {
     Unknown,
     /// Preflop holding before board evidence exists.
     Preflop,
-    /// High-card showdown value.
-    HighCard,
-    /// One pair.
-    Pair,
+    /// No meaningful made hand or overcard value.
+    Air,
+    /// High cards that may improve against the board.
+    Overcards,
+    /// The best pair is already on the board.
+    BoardPairOnly,
+    /// A weak pair or underpair.
+    WeakPair,
+    /// Top pair with a vulnerable kicker.
+    TopPairWeakKicker,
+    /// Top pair with a good kicker.
+    TopPairGoodKicker,
+    /// Pocket pair above the board.
+    OverPair,
     /// Two pair or trips.
-    StrongMade,
+    TwoPairOrTrips,
     /// Straight, flush, or better.
     PremiumMade,
 }
@@ -197,6 +207,8 @@ pub enum BettingMotive {
     SemiBluff,
     /// Continue because the call price is justified.
     PotOddsCall,
+    /// Defend a blind or playable preflop hand against a raise.
+    Defend,
     /// Check or call with showdown value.
     ShowdownValue,
     /// Enter first and try to steal dead money.

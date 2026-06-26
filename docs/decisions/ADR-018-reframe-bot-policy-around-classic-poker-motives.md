@@ -58,13 +58,15 @@ The next bot design should prefer concepts like:
 
 - `PokerSituation` or `SituationAssessment`, describing public action state,
   position, opponent count, pot size, stack depth, initiative, and pressure.
-- `HoldingClass`, describing made hand and showdown value.
+- `HoldingClass`, describing whether the made hand comes from private cards,
+  board texture, weak pairs, top-pair kicker quality, overpairs, or stronger
+  made hands.
 - `DrawClass`, describing flush draws, straight draws, overcards, combo draws,
   and weak backdoor material.
 - `PotOddsClass` or equivalent continue-price classification.
 - `BettingMotive`, with variants such as value, protection, bluff, semi-bluff,
-  pot-odds call, showdown-value check/call, gap fold, pressure fold, and give
-  up.
+  pot-odds call, blind or playable-hand defend, showdown-value check/call, gap
+  fold, pressure fold, free card, and give up.
 - `SizingFamily`, if sizing needs a separate named output, using poker-facing
   terms such as small pot fraction, medium value size, protection size,
   isolation size, short-stack commit, and all-in.
@@ -139,8 +141,8 @@ directly into policy code.
   and fields instead of preserving them.
 - CLI watch and stats should evolve toward situation/motive output.
 - Tests should assert observable behavior and, where diagnostics are public,
-  named motives such as value, protection, semi-bluff, pot-odds call, and
-  pressure fold.
+  named motives such as value, protection, semi-bluff, defend, pot-odds call,
+  and pressure fold.
 - Bounded Monte Carlo remains an input to equity and range evidence, not a
   solver or direct action oracle.
 - Tests and diagnostics should preserve the incomplete-information boundary:
