@@ -261,6 +261,7 @@ impl BotDecisionContext {
         self.matched_bet_opponents = Some(action_context.matched_bet_opponents());
         self.big_blind = Some(action_context.big_blind());
         self.current_bet = Some(action_context.current_bet());
+        self.street_raise_count = Some(action_context.street_raise_count());
         self
     }
 
@@ -524,11 +525,14 @@ fn defend_threshold(profile: BotProfile, context: &BotDecisionContext, short_han
         scaled_count_penalty(matched, 0.020).min(0.08)
     });
     let cold_call_penalty = if posted_blind { 0.0 } else { 0.06 };
+    let raise_depth_penalty =
+        f32::from(context.street_raise_count.unwrap_or(1).saturating_sub(1)) * 0.08;
     (0.62 - profile.call_bias * 0.12 - blind_discount - short_handed * 0.08 - price_discount
         + raise_size_pressure(context)
         + full_ring_penalty
         + multiway_penalty
-        + cold_call_penalty)
+        + cold_call_penalty
+        + raise_depth_penalty)
         .clamp(0.34, 0.86)
 }
 
@@ -559,6 +563,16 @@ fn raise_size_pressure(context: &BotDecisionContext) -> f32 {
 }
 
 fn position_openness(context: &BotDecisionContext) -> f32 {
+    if context.street == Street::Preflop
+        && context
+            .actor_street_contributed
+            .is_some_and(|contributed| contributed > Chips::ZERO)
+        && context.current_bet == context.big_blind
+        && context.legal_actions.to_call() > Chips::ZERO
+        && context.live_opponents == Some(1)
+    {
+        return 1.0;
+    }
     let Some(button) = context.button else {
         return 0.5;
     };
@@ -1246,6 +1260,62 @@ mod tests {
         .with_action_context(hand.action_context().expect("context"))
     }
 
+    fn full_ring_cold_call_facing_three_bet_context() -> BotDecisionContext {
+        let stacks = [Chips::from_units(100); 8];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        hand.apply_action(
+            Seat::new(3).expect("utg"),
+            BetAction::RaiseTo(Chips::from_units(5)),
+        )
+        .expect("open");
+        hand.apply_action(
+            Seat::new(4).expect("three-bettor"),
+            BetAction::RaiseTo(Chips::from_units(11)),
+        )
+        .expect("three-bet");
+        let actor = Seat::new(5).expect("actor");
+        assert_eq!(hand.next_to_act(), Some(actor));
+        BotDecisionContext::new(
+            8,
+            actor,
+            Street::Preflop,
+            hand.legal_actions().expect("legal"),
+        )
+        .with_action_context(hand.action_context().expect("context"))
+    }
+
+    fn unopened_small_blind_context() -> BotDecisionContext {
+        let stacks = [Chips::from_units(100); 8];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(7).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        for index in [2, 3, 4, 5, 6, 7] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Fold)
+                .expect("fold");
+        }
+        let actor = Seat::new(0).expect("small blind");
+        assert_eq!(hand.next_to_act(), Some(actor));
+        BotDecisionContext::new(
+            8,
+            actor,
+            Street::Preflop,
+            hand.legal_actions().expect("legal"),
+        )
+        .with_action_context(hand.action_context().expect("context"))
+    }
+
     #[test]
     fn presets_are_clamped_profiles() {
         for preset in [
@@ -1345,6 +1415,21 @@ mod tests {
     }
 
     #[test]
+    fn balanced_bot_steals_small_blind_with_playable_suited_king() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = unopened_small_blind_context().with_hole_cards(Some([
+            Card::new(Rank::King, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Eight, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
+    }
+
+    #[test]
     fn balanced_bot_uses_dealt_count_after_seats_bust() {
         let bot = HeuristicBot::from_preset(BotPreset::Balanced);
         let context = heads_up_button_context_at_table(6).with_hole_cards(Some([
@@ -1389,6 +1474,18 @@ mod tests {
         let context = full_ring_cold_call_facing_open_context().with_hole_cards(Some([
             Card::new(Rank::Queen, mtholdem::Suit::Clubs),
             Card::new(Rank::Seven, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Fold);
+    }
+
+    #[test]
+    fn balanced_bot_folds_broadway_full_ring_cold_call_against_three_bet() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_cold_call_facing_three_bet_context().with_hole_cards(Some([
+            Card::new(Rank::Queen, mtholdem::Suit::Clubs),
+            Card::new(Rank::Jack, mtholdem::Suit::Hearts),
         ]));
         let mut rng = StdRng::seed_from_u64(1);
 

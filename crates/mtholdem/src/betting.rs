@@ -125,6 +125,7 @@ pub struct ActionContext {
     matched_bet_opponents: usize,
     big_blind: Chips,
     current_bet: Chips,
+    street_raise_count: u8,
 }
 
 impl ActionContext {
@@ -180,6 +181,12 @@ impl ActionContext {
     #[must_use]
     pub const fn current_bet(self) -> Chips {
         self.current_bet
+    }
+
+    /// Number of voluntary bet or raise actions that increased this street's wager.
+    #[must_use]
+    pub const fn street_raise_count(self) -> u8 {
+        self.street_raise_count
     }
 }
 
@@ -393,6 +400,7 @@ pub struct BettingRound {
     last_action_bet: Vec<Option<Chips>>,
     reopen_increment: Vec<Chips>,
     last_aggressor: Option<Seat>,
+    street_raise_count: u8,
     complete: bool,
 }
 
@@ -465,6 +473,7 @@ impl BettingRound {
             last_action_bet,
             reopen_increment,
             last_aggressor: None,
+            street_raise_count: 0,
             complete,
         })
     }
@@ -573,6 +582,7 @@ impl BettingRound {
             matched_bet_opponents,
             big_blind: self.ledger.big_blind,
             current_bet: self.current_bet,
+            street_raise_count: self.street_raise_count,
         })
     }
 
@@ -704,6 +714,7 @@ impl BettingRound {
         HandLedger::contribute(self.ledger.seat_mut(actor)?, contribution)?;
         self.current_bet = target;
         self.last_aggressor = Some(actor);
+        self.street_raise_count = self.street_raise_count.saturating_add(1);
 
         if full_raise {
             self.has_full_wager = true;
@@ -1130,6 +1141,28 @@ mod tests {
         assert_eq!(context.matched_bet_opponents(), 4);
         assert_eq!(context.big_blind(), chips(2));
         assert_eq!(context.current_bet(), chips(2));
+        assert_eq!(context.street_raise_count(), 0);
+    }
+
+    #[test]
+    fn action_context_reports_street_raise_count() {
+        let mut ledger = HandLedger::new(&[chips(100); 4], seat(0), chips(2)).expect("ledger");
+        ledger.post_forced_bet(seat(1), chips(1)).expect("sb");
+        ledger.post_forced_bet(seat(2), chips(2)).expect("bb");
+        let mut round =
+            BettingRound::new(ledger, Street::Preflop, seat(3), chips(2)).expect("round");
+
+        round
+            .apply(seat(3), BetAction::RaiseTo(chips(5)))
+            .expect("open");
+        let context = round.action_context().expect("context");
+        assert_eq!(context.street_raise_count(), 1);
+
+        round
+            .apply(seat(0), BetAction::RaiseTo(chips(11)))
+            .expect("three-bet");
+        let context = round.action_context().expect("context");
+        assert_eq!(context.street_raise_count(), 2);
     }
 
     #[test]
