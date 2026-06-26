@@ -1096,8 +1096,8 @@ mod tests {
         let outcome = run_session(
             Options {
                 players: 3,
-                seed: 2,
-                preset: BotPreset::Balanced,
+                seed: 4,
+                preset: BotPreset::Maniac,
                 human: None,
                 hands: Some(1),
                 backend: TableBackend::RulesOnly,

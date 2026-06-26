@@ -10,6 +10,9 @@
 use mtholdem::betting::{ActionContext, BetAction, LegalActions, Street};
 use mtholdem::{Card, Chips, HandCategory, Rank, Seat};
 use rand::Rng;
+use rand::seq::SliceRandom;
+
+const MONTE_CARLO_SAMPLES: usize = 96;
 
 /// A configurable lightweight bot tendency profile.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -257,6 +260,8 @@ pub struct HandAssessment {
     pub category: Option<HandCategory>,
     /// Lightweight draw and overcard potential in `0.0..=1.0`.
     pub draw_potential: f32,
+    /// Range-aware Monte Carlo equity estimate, when enough local/public cards are known.
+    pub equity: Option<f32>,
     /// Cost pressure from call amount, pot odds, and multiway context.
     pub pressure: f32,
     /// Total score used for continue and aggression thresholds.
@@ -352,7 +357,11 @@ impl HeuristicBot {
 
     /// Assesses the public and local-private information available to the bot.
     pub fn assess(&self, context: &BotDecisionContext, rng: &mut impl Rng) -> HandAssessment {
-        let (strength, category) = made_strength(context);
+        let (made_strength, category) = made_strength(context);
+        let equity = monte_carlo_equity(context, self.profile, rng);
+        let strength = equity.map_or(made_strength, |equity| {
+            clamp01(made_strength.mul_add(0.65, equity * 0.35))
+        });
         let draw_potential = draw_potential(context);
         let pressure = decision_pressure(context);
         let noise = rng.gen_range(-0.5..0.5) * self.profile.randomness;
@@ -370,6 +379,7 @@ impl HeuristicBot {
             strength,
             category,
             draw_potential,
+            equity,
             pressure,
             score,
         }
@@ -644,6 +654,144 @@ fn overcard_potential(hole_cards: [Card; 2], board: &[Card]) -> f32 {
     if overcards == 2 { 0.04 } else { 0.0 }
 }
 
+fn monte_carlo_equity(
+    context: &BotDecisionContext,
+    profile: BotProfile,
+    rng: &mut impl Rng,
+) -> Option<f32> {
+    let hole_cards = context.hole_cards?;
+    if context.board.len() > 5 {
+        return None;
+    }
+    let opponent_count = context
+        .live_opponents
+        .unwrap_or_else(|| context.player_count.saturating_sub(1))
+        .min(7);
+    if opponent_count == 0 {
+        return Some(1.0);
+    }
+
+    let known_cards = known_cards(hole_cards, &context.board)?;
+    let mut total_share = 0.0;
+    let mut completed = 0_usize;
+    for _ in 0..MONTE_CARLO_SAMPLES {
+        let Some(share) = simulate_equity_once(context, profile, &known_cards, opponent_count, rng)
+        else {
+            continue;
+        };
+        total_share += share;
+        completed += 1;
+    }
+    (completed > 0).then(|| {
+        let completed = u16::try_from(completed).expect("sample count fits u16");
+        total_share / f32::from(completed)
+    })
+}
+
+fn known_cards(hole_cards: [Card; 2], board: &[Card]) -> Option<Vec<Card>> {
+    let mut known = Vec::with_capacity(hole_cards.len() + board.len());
+    known.extend_from_slice(&hole_cards);
+    known.extend_from_slice(board);
+    unique_cards(&known).then_some(known)
+}
+
+fn simulate_equity_once(
+    context: &BotDecisionContext,
+    profile: BotProfile,
+    known_cards: &[Card],
+    opponent_count: usize,
+    rng: &mut impl Rng,
+) -> Option<f32> {
+    let hole_cards = context.hole_cards?;
+    let mut deck = remaining_deck(known_cards);
+    deck.shuffle(rng);
+    let mut opponents = Vec::with_capacity(opponent_count);
+    for _ in 0..opponent_count {
+        opponents.push(draw_opponent_hand(&mut deck, context, profile, rng)?);
+    }
+    let mut board = context.board.clone();
+    while board.len() < 5 {
+        board.push(deck.pop()?);
+    }
+
+    let hero_value = evaluate_holdem(hole_cards, &board)?;
+    let mut tied = 0_u8;
+    for opponent in opponents {
+        let opponent_value = evaluate_holdem(opponent, &board)?;
+        if opponent_value > hero_value {
+            return Some(0.0);
+        }
+        if opponent_value == hero_value {
+            tied = tied.saturating_add(1);
+        }
+    }
+    Some(1.0 / f32::from(tied.saturating_add(1)))
+}
+
+fn draw_opponent_hand(
+    deck: &mut Vec<Card>,
+    context: &BotDecisionContext,
+    profile: BotProfile,
+    rng: &mut impl Rng,
+) -> Option<[Card; 2]> {
+    let threshold = opponent_range_threshold(context, profile);
+    for _ in 0..24 {
+        let first = rng.gen_range(0..deck.len());
+        let card_a = deck.swap_remove(first);
+        let second = rng.gen_range(0..deck.len());
+        let card_b = deck.swap_remove(second);
+        let hand = [card_a, card_b];
+        if preflop_score(hand) >= threshold {
+            return Some(hand);
+        }
+        deck.push(card_a);
+        deck.push(card_b);
+    }
+    let card_a = deck.pop()?;
+    let card_b = deck.pop()?;
+    Some([card_a, card_b])
+}
+
+fn opponent_range_threshold(context: &BotDecisionContext, profile: BotProfile) -> f32 {
+    let looseness = profile.looseness.clamp(0.0, 1.0);
+    let mut threshold = 0.82 - looseness * 0.42;
+    if context.legal_actions.to_call().units() > 0 {
+        threshold += 0.04;
+    }
+    if context.street != Street::Preflop {
+        threshold -= 0.05;
+    }
+    if context.live_opponents.unwrap_or(1) > 2 {
+        threshold += 0.03;
+    }
+    threshold.clamp(0.28, 0.86)
+}
+
+fn remaining_deck(known_cards: &[Card]) -> Vec<Card> {
+    (0..52)
+        .filter_map(|index| {
+            let card = Card::from_index(index).expect("deck index is valid");
+            (!known_cards.contains(&card)).then_some(card)
+        })
+        .collect()
+}
+
+fn evaluate_holdem(hole_cards: [Card; 2], board: &[Card]) -> Option<mtholdem::card::HandValue> {
+    let mut cards = Vec::with_capacity(hole_cards.len() + board.len());
+    cards.extend_from_slice(&hole_cards);
+    cards.extend_from_slice(board);
+    mtholdem::card::evaluate_best(&cards).ok()
+}
+
+fn unique_cards(cards: &[Card]) -> bool {
+    for (index, card) in cards.iter().enumerate() {
+        if cards[index + 1..].contains(card) {
+            return false;
+        }
+    }
+    true
+}
+
 fn decision_pressure(context: &BotDecisionContext) -> f32 {
     let mut pressure = call_cost_ratio(context) * 0.45;
     if context.legal_actions.to_call().units() >= 20 {
@@ -873,5 +1021,77 @@ mod tests {
         let context = big_blind_after_limpers_context();
         let target = sized_raise(&context, BetSizing::PotFraction(0.5)).expect("raise target");
         assert_eq!(target, Chips::from_units(14));
+    }
+
+    #[test]
+    fn monte_carlo_equity_separates_strong_hands_from_air() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let board = [
+            Card::new(Rank::King, mtholdem::Suit::Hearts),
+            Card::new(Rank::Seven, mtholdem::Suit::Clubs),
+            Card::new(Rank::Two, mtholdem::Suit::Spades),
+        ];
+        let strong = BotDecisionContext::new(
+            3,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::King, mtholdem::Suit::Clubs),
+            Card::new(Rank::King, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board(board)
+        .with_live_opponents(2);
+        let weak = BotDecisionContext::new(
+            3,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Queen, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Jack, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board(board)
+        .with_live_opponents(2);
+
+        let strong_equity = bot
+            .assess(&strong, &mut StdRng::seed_from_u64(11))
+            .equity
+            .expect("strong equity");
+        let weak_equity = bot
+            .assess(&weak, &mut StdRng::seed_from_u64(11))
+            .equity
+            .expect("weak equity");
+        assert!(strong_equity > weak_equity + 0.30);
+    }
+
+    #[test]
+    fn monte_carlo_equity_rejects_duplicate_known_cards() {
+        let context = BotDecisionContext::new(
+            2,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::Seven, mtholdem::Suit::Clubs),
+            Card::new(Rank::Two, mtholdem::Suit::Spades),
+        ]);
+
+        assert!(
+            monte_carlo_equity(
+                &context,
+                BotPreset::Balanced.profile(),
+                &mut StdRng::seed_from_u64(3),
+            )
+            .is_none()
+        );
     }
 }

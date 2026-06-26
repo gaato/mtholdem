@@ -178,13 +178,13 @@ The profile values model looseness, aggression, call bias, bluffing, and randomn
 crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
 use it only when answering `HostEffect::RequestAction`. The current policy is still pre-stable, but
 it now exposes assessment, intent, and sizing stages before final legality mapping. Postflop
-assessment may later add bounded deterministic Monte Carlo equity while respecting public information
-boundaries.
+assessment includes bounded Monte Carlo equity over unknown cards and a lightweight opponent range
+threshold while respecting public information boundaries.
 Peer-backed and rules-only hosts should feed it the same public action context
 so sizing does not depend on backend internals. See
 [ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md)
 and [ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-action-requests.md).
-The next opponent-quality target is a range-aware Monte Carlo heuristic, not a
+The opponent-quality target remains a range-aware Monte Carlo heuristic, not a
 solver or self-play system; see
 [ADR-016](../../../docs/decisions/ADR-016-build-bot-as-range-aware-monte-carlo-heuristic.md).
 
