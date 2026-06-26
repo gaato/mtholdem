@@ -10,7 +10,9 @@ use mtholdem::deal::DealPlan;
 use mtholdem::holdem::{HandProgress, HoldemHand};
 use mtholdem::transcript::TranscriptAnchor;
 use mtholdem::{Card, Chips, HandNumber, Rank, Seat, SessionId, Suit};
-use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
+use mtholdem_bot::{
+    ActionIntent, BetSizing, BotDecision, BotDecisionContext, BotPreset, HeuristicBot,
+};
 use mtholdem_peer::{FinishedHand, HostEffect, PeerPhase, PeerSession};
 use mtholdem_table::{TableBackend, TableShowdown};
 use rand::SeedableRng;
@@ -30,6 +32,7 @@ struct Options {
     hands: Option<u64>,
     backend: TableBackend,
     stats: bool,
+    watch_bot: Option<Seat>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,6 +322,7 @@ struct InProcessHand {
     printed_board_len: usize,
     bot: HeuristicBot,
     bot_rng: StdRng,
+    watch_bot: Option<Seat>,
     crypto_rng: OsRng,
 }
 
@@ -359,7 +363,9 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         hands: None,
         backend: TableBackend::Peer,
         stats: false,
+        watch_bot: None,
     };
+    let mut human_explicit = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -377,6 +383,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             }
             "--human" => {
                 index += 1;
+                human_explicit = true;
                 options.human = Some(parse_seat(args.get(index).map(String::as_str))?);
             }
             "--bots-only" => {
@@ -393,6 +400,10 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             "--stats" => {
                 options.stats = true;
             }
+            "--watch-bot" => {
+                index += 1;
+                options.watch_bot = Some(parse_seat(args.get(index).map(String::as_str))?);
+            }
             other => return Err(format!("unknown play-bot option: {other}")),
         }
         index += 1;
@@ -404,6 +415,15 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         if human.index() >= options.players {
             return Err("--human seat must be lower than --players".to_owned());
         }
+    }
+    if let Some(watch_bot) = options.watch_bot {
+        if watch_bot.index() >= options.players {
+            return Err("--watch-bot seat must be lower than --players".to_owned());
+        }
+        if human_explicit {
+            return Err("--watch-bot cannot be combined with --human".to_owned());
+        }
+        options.human = None;
     }
     Ok(options)
 }
@@ -458,7 +478,7 @@ fn parse_seat(value: Option<&str>) -> Result<Seat, String> {
 
 fn print_play_bot_help() {
     println!(
-        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only] [--stats]"
+        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only] [--stats] [--watch-bot SEAT]"
     );
     println!("presets: nit, balanced, loose-passive, lag, maniac");
     println!("human seat defaults to seat0 and runs until quit; use --hands N to bound it");
@@ -467,6 +487,7 @@ fn print_play_bot_help() {
     println!("human actions: fold, check, call, bet N, raise N, quit");
     println!("backends: peer, rules-only");
     println!("--stats prints preflop VPIP/PFR/RFI/3bet/fold-to-open/blind-defense rates");
+    println!("--watch-bot SEAT runs that seat as a bot and prints its decision details");
     println!("board updates are printed as flop, turn, and river when cards open");
 }
 
@@ -625,6 +646,7 @@ fn run_peer_hand(
         printed_board_len: 0,
         bot: HeuristicBot::from_preset(options.preset),
         bot_rng: StdRng::seed_from_u64(options.seed),
+        watch_bot: options.watch_bot,
         crypto_rng,
     }
     .run(options.human, stats, input, output)
@@ -672,12 +694,18 @@ fn run_rules_only_hand(
                 let action = if options.human == Some(actor) {
                     read_human_action(&context, input, output)?
                 } else {
-                    HumanInput::Action(bot.choose_action(&context, &mut rng))
+                    HumanInput::Action(choose_bot_action(
+                        bot,
+                        &context,
+                        &mut rng,
+                        options.watch_bot,
+                        output,
+                    )?)
                 };
                 let HumanInput::Action(action) = action else {
                     return Ok(HandOutcome::Quit);
                 };
-                print_action(actor, street, action, legal_actions);
+                write_action(actor, street, action, legal_actions, output)?;
                 stats.record_action(actor, street, &context, action);
                 hand.apply_action(actor, action)?;
             }
@@ -866,12 +894,18 @@ impl InProcessHand {
                 let action = if human == Some(actor) {
                     read_human_action(&context, input, output)?
                 } else {
-                    HumanInput::Action(self.bot.choose_action(&context, &mut self.bot_rng))
+                    HumanInput::Action(choose_bot_action(
+                        self.bot,
+                        &context,
+                        &mut self.bot_rng,
+                        self.watch_bot,
+                        output,
+                    )?)
                 };
                 let HumanInput::Action(action) = action else {
                     return Ok(true);
                 };
-                print_action(actor, street, action, legal_actions);
+                write_action(actor, street, action, legal_actions, output)?;
                 stats.record_action(actor, street, &context, action);
                 self.sessions[sender_index].submit_action(action)?;
                 self.sessions[sender_index].progress(&mut self.crypto_rng)?;
@@ -1008,6 +1042,126 @@ fn write_showdown_summary(
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     }
     writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn choose_bot_action(
+    bot: HeuristicBot,
+    context: &BotDecisionContext,
+    rng: &mut impl rand::Rng,
+    watch_bot: Option<Seat>,
+    output: &mut impl Write,
+) -> mtholdem::Result<BetAction> {
+    let decision = bot.decide(context, rng);
+    if watch_bot == Some(context.actor) {
+        write_bot_watch(context, &decision, output)?;
+    }
+    Ok(decision.action)
+}
+
+fn write_bot_watch(
+    context: &BotDecisionContext,
+    decision: &BotDecision,
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    writeln!(output, "bot-watch: {} {}", context.actor, context.street)
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    if let Some([first, second]) = context.hole_cards {
+        writeln!(output, "hand: {first} {second}")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    } else {
+        writeln!(output, "hand: unknown")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    }
+    writeln!(output, "board: {}", format_cards(&context.board))
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(output, "pot: {}", format_optional_chips(context.pot))
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "to call: {}",
+        context.legal_actions.to_call().units()
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "current bet: {}",
+        format_optional_chips(context.current_bet)
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "live opponents: {}",
+        format_optional_usize(context.live_opponents)
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "matched opponents: {}",
+        format_optional_usize(context.matched_bet_opponents)
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "assessment: strength={} equity={} draw={} pressure={} score={} category={}",
+        format_float(decision.assessment.strength),
+        format_optional_float(decision.assessment.equity),
+        format_float(decision.assessment.draw_potential),
+        format_float(decision.assessment.pressure),
+        format_float(decision.assessment.score),
+        decision
+            .assessment
+            .category
+            .map_or_else(|| "-".to_owned(), |category| category.to_string())
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "decision: intent={} sizing={} action={}",
+        format_intent(decision.intent),
+        format_sizing(decision.sizing),
+        format_action(
+            context.actor,
+            context.street,
+            decision.action,
+            context.legal_actions
+        )
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn format_optional_chips(value: Option<Chips>) -> String {
+    value.map_or_else(|| "-".to_owned(), |chips| chips.units().to_string())
+}
+
+fn format_optional_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "-".to_owned(), |value| value.to_string())
+}
+
+fn format_optional_float(value: Option<f32>) -> String {
+    value.map_or_else(|| "-".to_owned(), format_float)
+}
+
+fn format_float(value: f32) -> String {
+    format!("{value:.2}")
+}
+
+const fn format_intent(intent: ActionIntent) -> &'static str {
+    match intent {
+        ActionIntent::Fold => "fold",
+        ActionIntent::Check => "check",
+        ActionIntent::Call => "call",
+        ActionIntent::Bet => "bet",
+        ActionIntent::Raise => "raise",
+        ActionIntent::AllIn => "all-in",
+    }
+}
+
+fn format_sizing(sizing: BetSizing) -> String {
+    match sizing {
+        BetSizing::None => "none".to_owned(),
+        BetSizing::PotFraction(fraction) => format!("pot {fraction:.2}"),
+        BetSizing::AllIn => "all-in".to_owned(),
+    }
 }
 
 fn read_human_action(
@@ -1190,8 +1344,15 @@ fn format_cards(cards: &[Card]) -> String {
     }
 }
 
-fn print_action(actor: Seat, street: Street, action: BetAction, legal: LegalActions) {
-    println!("{}", format_action(actor, street, action, legal));
+fn write_action(
+    actor: Seat,
+    street: Street,
+    action: BetAction,
+    legal: LegalActions,
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    writeln!(output, "{}", format_action(actor, street, action, legal))
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
 
 fn format_action(actor: Seat, street: Street, action: BetAction, legal: LegalActions) -> String {
@@ -1238,6 +1399,7 @@ mod tests {
                     hands: None,
                     backend: TableBackend::Peer,
                     stats: false,
+                    watch_bot: None,
                 },
                 HandNumber::FIRST,
                 &TableState::new(2),
@@ -1274,6 +1436,7 @@ mod tests {
                     hands: None,
                     backend: TableBackend::Peer,
                     stats: false,
+                    watch_bot: None,
                 },
                 HandNumber::FIRST,
                 &TableState::new(2),
@@ -1310,6 +1473,7 @@ mod tests {
                 hands: Some(1),
                 backend: TableBackend::RulesOnly,
                 stats: false,
+                watch_bot: None,
             },
             &mut input,
             &mut output,
@@ -1335,6 +1499,7 @@ mod tests {
                 hands: Some(1),
                 backend: TableBackend::RulesOnly,
                 stats: false,
+                watch_bot: None,
             },
             &mut io::empty(),
             &mut output,
@@ -1361,6 +1526,7 @@ mod tests {
                     hands: None,
                     backend: TableBackend::Peer,
                     stats: false,
+                    watch_bot: None,
                 },
                 HandNumber::FIRST,
                 &TableState::new(4),
@@ -1395,6 +1561,7 @@ mod tests {
                 hands: Some(2),
                 backend: TableBackend::Peer,
                 stats: false,
+                watch_bot: None,
             },
             &mut input,
             &mut output,
@@ -1418,6 +1585,7 @@ mod tests {
                 hands: None,
                 backend: TableBackend::Peer,
                 stats: false,
+                watch_bot: None,
             },
             &mut input,
             &mut output,
@@ -1440,6 +1608,7 @@ mod tests {
                 hands: None,
                 backend: TableBackend::Peer,
                 stats: false,
+                watch_bot: None,
             },
             &mut io::empty(),
             &mut output,
@@ -1462,6 +1631,7 @@ mod tests {
                 hands: Some(2),
                 backend: TableBackend::Peer,
                 stats: false,
+                watch_bot: None,
             },
             &mut io::empty(),
             &mut output,
@@ -1484,6 +1654,7 @@ mod tests {
                 hands: Some(2),
                 backend: TableBackend::Peer,
                 stats: false,
+                watch_bot: None,
             },
             &mut io::empty(),
             &mut output,
@@ -1529,6 +1700,7 @@ mod tests {
                 hands: Some(2),
                 backend: TableBackend::RulesOnly,
                 stats: false,
+                watch_bot: None,
             },
             &mut io::empty(),
             &mut output,
@@ -1573,6 +1745,7 @@ mod tests {
                 hands: Some(2),
                 backend: TableBackend::RulesOnly,
                 stats: true,
+                watch_bot: None,
             },
             &mut io::empty(),
             &mut output,
@@ -1584,6 +1757,34 @@ mod tests {
         assert!(output.contains("bot action stats:"));
         assert!(output.contains("vpip pfr rfi 3bet fold-to-open blind-defense"));
         assert!(output.contains("all 6 "));
+    }
+
+    #[test]
+    fn watch_bot_prints_decision_details() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 3,
+                seed: 7,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(1),
+                backend: TableBackend::RulesOnly,
+                stats: false,
+                watch_bot: Some(Seat::new(0).expect("seat")),
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("watched bot session finishes");
+
+        assert_eq!(outcome.completed_hands, 1);
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("bot-watch: seat 0"));
+        assert!(output.contains("hand:"));
+        assert!(output.contains("assessment:"));
+        assert!(output.contains("decision:"));
+        assert!(output.contains("preflop: seat 0"));
     }
 
     #[test]
@@ -1690,6 +1891,47 @@ mod tests {
     fn play_bot_can_disable_human_input() {
         let options = parse_options(&["--bots-only".to_owned()]).expect("bots-only options");
         assert_eq!(options.human, None);
+    }
+
+    #[test]
+    fn play_bot_can_watch_bot_seat() {
+        let options =
+            parse_options(&["--watch-bot".to_owned(), "seat0".to_owned()]).expect("watch options");
+        assert_eq!(options.watch_bot, Some(Seat::new(0).expect("seat")));
+        assert_eq!(options.human, None);
+    }
+
+    #[test]
+    fn play_bot_can_watch_numeric_bot_seat() {
+        let options =
+            parse_options(&["--watch-bot".to_owned(), "0".to_owned()]).expect("watch options");
+        assert_eq!(options.watch_bot, Some(Seat::new(0).expect("seat")));
+    }
+
+    #[test]
+    fn play_bot_rejects_out_of_range_watch_bot() {
+        assert!(
+            parse_options(&[
+                "--players".to_owned(),
+                "3".to_owned(),
+                "--watch-bot".to_owned(),
+                "3".to_owned(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn play_bot_rejects_human_and_watch_bot_combination() {
+        assert!(
+            parse_options(&[
+                "--human".to_owned(),
+                "0".to_owned(),
+                "--watch-bot".to_owned(),
+                "1".to_owned(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]
