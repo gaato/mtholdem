@@ -300,6 +300,8 @@ pub struct MthEffect {
     pub can_check: bool,
     /// Whether public action-context fields are meaningful.
     pub has_action_context: bool,
+    /// Dealer button seat index for the current hand.
+    pub button_seat: u8,
     /// Current pot size before the actor chooses.
     pub pot_units: u64,
     /// Actor's remaining stack before choosing.
@@ -350,6 +352,7 @@ impl MthEffect {
             raise_reopened: false,
             can_check: false,
             has_action_context: false,
+            button_seat: 0,
             pot_units: 0,
             actor_stack_units: 0,
             actor_street_contributed_units: 0,
@@ -392,6 +395,7 @@ impl From<BoundaryEffect> for MthEffect {
         }
         if let Some(context) = value.action_context() {
             effect.has_action_context = true;
+            effect.button_seat = context.button_seat();
             effect.pot_units = context.pot_units();
             effect.actor_stack_units = context.actor_stack_units();
             effect.actor_street_contributed_units = context.actor_street_contributed_units();

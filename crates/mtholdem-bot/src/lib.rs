@@ -103,6 +103,8 @@ pub struct BotDecisionContext {
     pub player_count: usize,
     /// Acting seat.
     pub actor: Seat,
+    /// Dealer button seat, if the host exposes it.
+    pub button: Option<Seat>,
     /// Current betting street.
     pub street: Street,
     /// Legal actions and chip bounds for the actor.
@@ -143,6 +145,7 @@ impl BotDecisionContext {
         Self {
             player_count,
             actor,
+            button: None,
             street,
             legal_actions,
             hole_cards: None,
@@ -170,6 +173,13 @@ impl BotDecisionContext {
     #[must_use]
     pub fn with_board(mut self, board: impl Into<Vec<Card>>) -> Self {
         self.board = board.into();
+        self
+    }
+
+    /// Adds the dealer button seat.
+    #[must_use]
+    pub const fn with_button(mut self, button: Seat) -> Self {
+        self.button = Some(button);
         self
     }
 
@@ -233,6 +243,7 @@ impl BotDecisionContext {
     #[must_use]
     pub fn with_action_context(mut self, action_context: ActionContext) -> Self {
         self.pot = Some(action_context.pot());
+        self.button = Some(action_context.button());
         self.actor_stack = Some(action_context.actor_stack());
         self.actor_street_contributed = Some(action_context.actor_street_contributed());
         self.effective_stack = action_context.effective_stack();

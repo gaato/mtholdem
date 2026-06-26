@@ -116,6 +116,7 @@ impl LegalActions {
 /// peer secrets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActionContext {
+    button: Seat,
     pot: Chips,
     actor_stack: Chips,
     actor_street_contributed: Chips,
@@ -127,6 +128,12 @@ pub struct ActionContext {
 }
 
 impl ActionContext {
+    /// Dealer button seat for the current hand.
+    #[must_use]
+    pub const fn button(self) -> Seat {
+        self.button
+    }
+
     /// Current pot size before the actor chooses.
     #[must_use]
     pub const fn pot(self) -> Chips {
@@ -557,6 +564,7 @@ impl BettingRound {
         }
 
         Ok(ActionContext {
+            button: self.ledger.button,
             pot: self.ledger.pot()?,
             actor_stack: player.stack,
             actor_street_contributed: player.street_contributed,
@@ -1113,6 +1121,7 @@ mod tests {
 
         assert_eq!(round.next_to_act(), Some(seat(2)));
         let context = round.action_context().expect("context");
+        assert_eq!(context.button(), seat(0));
         assert_eq!(context.pot(), chips(10));
         assert_eq!(context.actor_stack(), chips(98));
         assert_eq!(context.actor_street_contributed(), chips(2));

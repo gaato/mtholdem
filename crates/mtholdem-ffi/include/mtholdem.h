@@ -83,6 +83,7 @@ typedef struct MthEffect {
     bool raise_reopened;
     bool can_check;
     bool has_action_context;
+    uint8_t button_seat;
     uint64_t pot_units;
     uint64_t actor_stack_units;
     uint64_t actor_street_contributed_units;

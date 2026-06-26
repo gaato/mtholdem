@@ -355,6 +355,7 @@ impl From<LegalActions> for BoundaryLegalActions {
 /// Public betting context for non-Rust host boundaries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundaryActionContext {
+    button_seat: u8,
     pot_units: u64,
     actor_stack_units: u64,
     actor_street_contributed_units: u64,
@@ -366,6 +367,12 @@ pub struct BoundaryActionContext {
 }
 
 impl BoundaryActionContext {
+    /// Returns the dealer button seat index.
+    #[must_use]
+    pub const fn button_seat(self) -> u8 {
+        self.button_seat
+    }
+
     /// Returns the current pot before the actor chooses.
     #[must_use]
     pub const fn pot_units(self) -> u64 {
@@ -418,6 +425,7 @@ impl BoundaryActionContext {
 impl From<ActionContext> for BoundaryActionContext {
     fn from(value: ActionContext) -> Self {
         Self {
+            button_seat: value.button().to_u8(),
             pot_units: value.pot().units(),
             actor_stack_units: value.actor_stack().units(),
             actor_street_contributed_units: value.actor_street_contributed().units(),
@@ -734,6 +742,7 @@ pub const fn hand_number_from_u64(value: u64) -> HandNumber {
 mod tests {
     use super::*;
     use mental_card_core::identity::IdentitySecret;
+    use mtholdem::betting::BettingRound;
     use mtholdem_peer::PeerSession;
 
     #[test]
@@ -755,6 +764,29 @@ mod tests {
             BoundaryError::from_error(&error).code(),
             BoundaryErrorCode::Codec
         );
+    }
+
+    #[test]
+    fn boundary_action_context_carries_button() -> Result<()> {
+        let button = Seat::new(1)?;
+        let mut ledger = mtholdem::betting::HandLedger::new(
+            &[Chips::from_units(100); 3],
+            button,
+            Chips::from_units(2),
+        )?;
+        ledger.post_forced_bet(Seat::new(2)?, Chips::from_units(1))?;
+        ledger.post_forced_bet(Seat::new(0)?, Chips::from_units(2))?;
+        let round = BettingRound::new(
+            ledger,
+            mtholdem::betting::Street::Preflop,
+            Seat::new(1)?,
+            Chips::from_units(2),
+        )?;
+
+        let context = BoundaryActionContext::from(round.action_context()?);
+
+        assert_eq!(context.button_seat(), button.to_u8());
+        Ok(())
     }
 
     #[test]
