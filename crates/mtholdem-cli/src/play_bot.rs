@@ -67,6 +67,7 @@ struct SeatStats {
     pfr: u64,
     rfi_opportunities: u64,
     rfi: u64,
+    three_bet_opportunities: u64,
     three_bet: u64,
     fold_to_open_opportunities: u64,
     fold_to_open: u64,
@@ -200,8 +201,12 @@ impl SessionStats {
                 && street_raise_count == 1;
             if facing_open {
                 self.update_actor_stats(actor_index, |stats| stats.fold_to_open_opportunities += 1);
+                self.update_actor_stats(actor_index, |stats| stats.three_bet_opportunities += 1);
                 if action == BetAction::Fold {
                     self.update_actor_stats(actor_index, |stats| stats.fold_to_open += 1);
+                }
+                if is_raise {
+                    self.update_actor_stats(actor_index, |stats| stats.three_bet += 1);
                 }
             }
 
@@ -232,9 +237,6 @@ impl SessionStats {
         }
 
         if is_raise {
-            if street_raise_count >= 1 {
-                self.update_actor_stats(actor_index, |stats| stats.three_bet += 1);
-            }
             if !self.current.pfr[actor_index] {
                 self.current.pfr[actor_index] = true;
                 self.update_actor_stats(actor_index, |stats| stats.pfr += 1);
@@ -397,6 +399,7 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.pfr += stats.pfr;
     total.rfi_opportunities += stats.rfi_opportunities;
     total.rfi += stats.rfi;
+    total.three_bet_opportunities += stats.three_bet_opportunities;
     total.three_bet += stats.three_bet;
     total.fold_to_open_opportunities += stats.fold_to_open_opportunities;
     total.fold_to_open += stats.fold_to_open;
@@ -428,7 +431,7 @@ fn write_stats_row(
         format_rate(stats.vpip, stats.hands),
         format_rate(stats.pfr, stats.hands),
         format_rate(stats.rfi, stats.rfi_opportunities),
-        stats.three_bet,
+        format_rate(stats.three_bet, stats.three_bet_opportunities),
         format_rate(stats.fold_to_open, stats.fold_to_open_opportunities),
         format_rate(stats.cold_continue, stats.cold_continue_opportunities),
         format_rate(stats.blind_defense, stats.blind_defense_opportunities),
