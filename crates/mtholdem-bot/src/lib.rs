@@ -1023,7 +1023,9 @@ fn preflop_score(cards: [Card; 2]) -> f32 {
             11 => 0.82,
             10 | 9 => 0.72,
             8 | 7 => 0.62,
-            2..=6 => 0.50,
+            6 => 0.59,
+            5 => 0.57,
+            2..=4 => 0.50,
             _ => 0.45,
         };
     }
@@ -1382,6 +1384,21 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
 
         assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Fold);
+    }
+
+    #[test]
+    fn balanced_bot_opens_middle_pair_first_in_from_six_max_early_position() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = six_max_unopened_context(3, &[]).with_hole_cards(Some([
+            Card::new(Rank::Five, mtholdem::Suit::Clubs),
+            Card::new(Rank::Five, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
     }
 
     #[test]
