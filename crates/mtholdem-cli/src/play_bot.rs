@@ -89,6 +89,9 @@ struct SeatStats {
     postflop_call: u64,
     postflop_fold: u64,
     postflop_check: u64,
+    postflop_facing_bet_opportunities: u64,
+    postflop_fold_to_bet: u64,
+    postflop_raise_vs_bet: u64,
     flop_cbet_opportunities: u64,
     flop_cbet: u64,
     turn_barrel_opportunities: u64,
@@ -297,6 +300,7 @@ impl SessionStats {
     ) {
         let is_open_bet = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
             && context.current_bet == Some(Chips::ZERO);
+        let is_facing_bet = context.legal_actions.to_call() > Chips::ZERO && !is_open_bet;
         let is_flop_cbet_opportunity = street == Street::Flop
             && self.current.last_preflop_raiser == Some(actor)
             && context.current_bet == Some(Chips::ZERO)
@@ -324,6 +328,15 @@ impl SessionStats {
                 stats.turn_barrel_opportunities += 1;
                 if is_open_bet {
                     stats.turn_barrel += 1;
+                }
+            }
+            if is_facing_bet {
+                stats.postflop_facing_bet_opportunities += 1;
+                if action == BetAction::Fold {
+                    stats.postflop_fold_to_bet += 1;
+                }
+                if matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn) {
+                    stats.postflop_raise_vs_bet += 1;
                 }
             }
         });
@@ -420,6 +433,23 @@ impl SessionStats {
                 write_postflop_stats_row(output, &format!("p{count}"), stats)?;
             }
         }
+        writeln!(output, "postflop facing-bet stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "seat facing fold raise")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write_facing_bet_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_facing_bet_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        writeln!(output, "postflop facing-bet by dealt players:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "players facing fold raise")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_facing_bet_stats_row(output, &format!("p{count}"), stats)?;
+            }
+        }
         writeln!(output, "flop continuation-bet stats:")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         writeln!(output, "seat cbet")
@@ -479,6 +509,9 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.postflop_call += stats.postflop_call;
     total.postflop_fold += stats.postflop_fold;
     total.postflop_check += stats.postflop_check;
+    total.postflop_facing_bet_opportunities += stats.postflop_facing_bet_opportunities;
+    total.postflop_fold_to_bet += stats.postflop_fold_to_bet;
+    total.postflop_raise_vs_bet += stats.postflop_raise_vs_bet;
     total.flop_cbet_opportunities += stats.flop_cbet_opportunities;
     total.flop_cbet += stats.flop_cbet;
     total.turn_barrel_opportunities += stats.turn_barrel_opportunities;
@@ -538,6 +571,27 @@ fn write_chip_stats_row(
         stats.hands,
         stats.net_chips,
         format_signed_rate(stats.net_chips, stats.hands),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn write_facing_bet_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{label} {} {} {}",
+        stats.postflop_facing_bet_opportunities,
+        format_rate(
+            stats.postflop_fold_to_bet,
+            stats.postflop_facing_bet_opportunities
+        ),
+        format_rate(
+            stats.postflop_raise_vs_bet,
+            stats.postflop_facing_bet_opportunities
+        ),
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
@@ -961,7 +1015,7 @@ fn run_evaluation(
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     writeln!(
         output,
-        "players run seed completed player-hands vpip pfr rfi 3bet fold-to-open blind-defense cbet barrel postflop-bet postflop-raise survivors leader-net"
+        "players run seed completed player-hands vpip pfr rfi 3bet fold-to-open blind-defense cbet barrel postflop-bet postflop-raise fold-to-bet raise-vs-bet survivors leader-net"
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     let base_seed = options.seed;
@@ -1004,7 +1058,7 @@ fn write_evaluation_row(
 ) -> mtholdem::Result<()> {
     writeln!(
         output,
-        "{players} {run_index} {seed} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+        "{players} {run_index} {seed} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
         outcome.completed_hands,
         stats.hands,
         format_rate(stats.vpip, stats.hands),
@@ -1017,6 +1071,14 @@ fn write_evaluation_row(
         format_rate(stats.turn_barrel, stats.turn_barrel_opportunities),
         format_rate(stats.postflop_bet, stats.postflop_actions),
         format_rate(stats.postflop_raise, stats.postflop_actions),
+        format_rate(
+            stats.postflop_fold_to_bet,
+            stats.postflop_facing_bet_opportunities
+        ),
+        format_rate(
+            stats.postflop_raise_vs_bet,
+            stats.postflop_facing_bet_opportunities
+        ),
         survivor_count(&outcome.final_stacks),
         leader_net(&outcome.final_stacks),
     )
@@ -2363,6 +2425,9 @@ mod tests {
         assert!(output.contains("postflop action stats:"));
         assert!(output.contains("seat actions bet raise call fold check"));
         assert!(output.contains("postflop by dealt players:"));
+        assert!(output.contains("postflop facing-bet stats:"));
+        assert!(output.contains("seat facing fold raise"));
+        assert!(output.contains("postflop facing-bet by dealt players:"));
         assert!(output.contains("flop continuation-bet stats:"));
         assert!(output.contains("flop continuation-bet by dealt players:"));
         assert!(output.contains("turn barrel stats:"));
@@ -2447,6 +2512,7 @@ mod tests {
         let output = String::from_utf8(output).expect("utf8");
         assert!(output.contains("bot evaluation:"));
         assert!(output.contains("players run seed completed player-hands"));
+        assert!(output.contains("fold-to-bet raise-vs-bet"));
         assert!(output.contains("2 0 "));
         assert!(output.contains("3 0 "));
         assert!(!output.contains("bot action stats:"));
