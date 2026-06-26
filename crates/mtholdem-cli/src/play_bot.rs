@@ -10,9 +10,7 @@ use mtholdem::deal::DealPlan;
 use mtholdem::holdem::{HandProgress, HoldemHand};
 use mtholdem::transcript::TranscriptAnchor;
 use mtholdem::{Card, Chips, HandNumber, Rank, Seat, SessionId, Suit};
-use mtholdem_bot::{
-    ActionIntent, BetSizing, BotDecision, BotDecisionContext, BotPreset, HeuristicBot,
-};
+use mtholdem_bot::{BettingMotive, BotDecision, BotDecisionContext, BotPreset, HeuristicBot};
 use mtholdem_peer::{FinishedHand, HostEffect, PeerPhase, PeerSession};
 use mtholdem_table::{TableBackend, TableShowdown};
 use rand::SeedableRng;
@@ -1744,23 +1742,37 @@ fn write_bot_watch(
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     writeln!(
         output,
-        "assessment(generic): strength={} equity={} draw={} pressure={} score={} category={}",
-        format_float(decision.assessment.strength),
-        format_optional_float(decision.assessment.equity),
-        format_float(decision.assessment.draw_potential),
-        format_float(decision.assessment.pressure),
-        format_float(decision.assessment.score),
-        decision
-            .assessment
-            .category
-            .map_or_else(|| "-".to_owned(), |category| category.to_string())
+        "situation: spot={:?} position={:?} opponents={:?} closure={:?} initiative={:?}",
+        decision.input.situation.betting_spot,
+        decision.input.situation.position,
+        decision.input.situation.opponents,
+        decision.input.situation.action_closure,
+        decision.input.situation.initiative,
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     writeln!(
         output,
-        "decision: intent={} sizing={} action={}",
-        format_intent(decision.intent),
-        format_sizing(decision.sizing),
+        "evidence: holding={:?} category={} draw={:?} draw_p={} equity={} pot_odds={} pot_odds_class={:?} range={:?} pressure={:?}",
+        decision.input.evidence.holding,
+        decision
+            .input
+            .evidence
+            .category
+            .map_or_else(|| "-".to_owned(), |category| category.to_string()),
+        decision.input.evidence.draw,
+        format_optional_float(decision.input.evidence.draw_completion_probability),
+        format_optional_float(decision.input.evidence.equity),
+        format_optional_float(decision.input.evidence.pot_odds),
+        decision.input.evidence.pot_odds_class,
+        decision.input.evidence.opponent_range,
+        decision.input.evidence.pressure,
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "decision: motive={} sizing={:?} action={}",
+        format_motive(decision.motive),
+        decision.sizing,
         format_action_name(context.street, decision.action, context.legal_actions)
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
@@ -1782,23 +1794,21 @@ fn format_float(value: f32) -> String {
     format!("{value:.2}")
 }
 
-const fn format_intent(intent: ActionIntent) -> &'static str {
-    match intent {
-        ActionIntent::Fold => "fold",
-        ActionIntent::Check => "check",
-        ActionIntent::Call => "call",
-        ActionIntent::Bet => "bet",
-        ActionIntent::Raise => "raise",
-        ActionIntent::AllIn => "all-in",
-    }
-}
-
-fn format_sizing(sizing: BetSizing) -> String {
-    match sizing {
-        BetSizing::None => "none".to_owned(),
-        BetSizing::PreflopOpenOrIsolation => "preflop open/isolation".to_owned(),
-        BetSizing::PotFraction(fraction) => format!("pot {fraction:.2}"),
-        BetSizing::AllIn => "all-in".to_owned(),
+const fn format_motive(motive: BettingMotive) -> &'static str {
+    match motive {
+        BettingMotive::Value => "value",
+        BettingMotive::Protection => "protection",
+        BettingMotive::Bluff => "bluff",
+        BettingMotive::SemiBluff => "semi-bluff",
+        BettingMotive::PotOddsCall => "pot-odds-call",
+        BettingMotive::ShowdownValue => "showdown-value",
+        BettingMotive::Steal => "steal",
+        BettingMotive::Isolation => "isolation",
+        BettingMotive::GapFold => "gap-fold",
+        BettingMotive::PressureFold => "pressure-fold",
+        BettingMotive::GiveUp => "give-up",
+        BettingMotive::FreeCard => "free-card",
+        BettingMotive::AllInPressure => "all-in-pressure",
     }
 }
 
@@ -2542,8 +2552,9 @@ mod tests {
         let output = String::from_utf8(output).expect("utf8");
         assert!(output.contains("bot-watch: seat 0"));
         assert!(output.contains("hand:"));
-        assert!(output.contains("assessment(generic):"));
-        assert!(output.contains("decision:"));
+        assert!(output.contains("situation:"));
+        assert!(output.contains("evidence:"));
+        assert!(output.contains("decision: motive="));
         assert!(output.contains("preflop: seat 0"));
         assert!(!output.contains("action=preflop:"));
     }

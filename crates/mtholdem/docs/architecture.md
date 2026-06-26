@@ -177,12 +177,15 @@ seeded RNG is deliberately predictable and therefore suitable only for tests.
 The profile values model looseness, aggression, call bias, bluffing, and randomness for demos. The
 crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
 use it only when answering `HostEffect::RequestAction`. The current policy is still pre-stable, but
-it now exposes assessment, intent, and sizing stages before final legality mapping. Postflop
-assessment includes bounded Monte Carlo equity over unknown cards and a lightweight opponent range
-threshold while respecting public information boundaries.
+the long-term diagnostic model is classic poker situation and motive vocabulary
+rather than one opaque scalar. Current numeric evidence such
+as equity, hand class, draw material, pot odds, and pressure should feed named
+motives such as value, protection, bluff, semi-bluff, pot-odds call, showdown
+value, and pressure fold.
 Peer-backed and rules-only hosts should feed it the same public action context
-so sizing does not depend on backend internals. See
-[ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md)
+so decisions do not depend on backend internals. See
+[ADR-018](../../../docs/decisions/ADR-018-reframe-bot-policy-around-classic-poker-motives.md),
+[ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md),
 and [ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-action-requests.md).
 The opponent-quality target remains a range-aware Monte Carlo heuristic, not a
 solver or self-play system; see

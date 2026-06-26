@@ -178,7 +178,7 @@ The profile values model looseness, aggression, call bias, bluffing, and randomn
 crate does not drive `PeerSession`, parse wire artifacts, verify transcripts, or expose an ABI; hosts
 use it only when answering `HostEffect::RequestAction`. The current policy is still pre-stable, but
 the long-term diagnostic model is classic poker situation and motive vocabulary
-rather than generic score/assessment thresholds. Current numeric evidence such
+rather than one opaque scalar. Current numeric evidence such
 as equity, hand class, draw material, pot odds, and pressure should feed named
 motives such as value, protection, bluff, semi-bluff, pot-odds call, showdown
 value, and pressure fold.

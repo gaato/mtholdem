@@ -7,10 +7,12 @@ Accepted
 2026-06-26
 
 ## Context
-`mtholdem-bot` now separates hand assessment, action intent, and bet sizing.
-That policy needs public table facts such as pot size, live opponents,
-effective stack, and prior street contribution to avoid minimum-size bets and
-raises. The CLI rules-only backend can derive those facts directly from
+`mtholdem-bot` now exposes a theorem-based `DecisionInput`: public
+`PokerSituation` plus public and local-private `DecisionEvidence`, followed by
+a `BettingMotive` and `SizingFamily`. That policy needs public table facts such
+as pot size, live opponents, effective stack, and prior street contribution to
+avoid hidden-card inspection and to explain its motives. The CLI rules-only
+backend can derive those facts directly from
 `HoldemHand::ledger`, but the peer-backed backend currently answers
 `HostEffect::RequestAction` with only the actor and `LegalActions`.
 
@@ -44,9 +46,10 @@ carried through `mtholdem-peer::HostEffect::RequestAction`. It may include:
 
 `mtholdem-bot` should consume this context through `BotDecisionContext`. The
 bot may use it for position-aware preflop range skeletons, limper-aware preflop
-isolation sizing, pot-relative postflop sizing, pressure assessment, and future
-bounded Monte Carlo tuning. The bot must still use only the acting seat's known
-hole cards, public board cards, legal actions, and public action context.
+isolation sizing, pot-relative postflop sizing, pot-odds classification,
+pressure classification, opponent-range assumptions, and bounded Monte Carlo
+tuning. The bot must still use only the acting seat's known hole cards, public
+board cards, legal actions, and public action context.
 
 The peer effect remains low-level and transport-neutral. It does not choose a
 bot action, advise a human, expose hidden opponent cards, or become a table
