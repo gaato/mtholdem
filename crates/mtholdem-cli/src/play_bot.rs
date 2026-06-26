@@ -82,6 +82,8 @@ struct SeatStats {
     postflop_check: u64,
     flop_cbet_opportunities: u64,
     flop_cbet: u64,
+    turn_barrel_opportunities: u64,
+    turn_barrel: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +93,7 @@ struct HandStats {
     voluntary_opened: bool,
     open_raiser: Option<Seat>,
     last_preflop_raiser: Option<Seat>,
+    flop_cbetter: Option<Seat>,
     dealt_player_count: usize,
 }
 
@@ -102,6 +105,7 @@ impl HandStats {
             voluntary_opened: false,
             open_raiser: None,
             last_preflop_raiser: None,
+            flop_cbetter: None,
             dealt_player_count,
         }
     }
@@ -257,6 +261,10 @@ impl SessionStats {
             && self.current.last_preflop_raiser == Some(actor)
             && context.current_bet == Some(Chips::ZERO)
             && context.legal_actions.can_check();
+        let is_turn_barrel_opportunity = street == Street::Turn
+            && self.current.flop_cbetter == Some(actor)
+            && context.current_bet == Some(Chips::ZERO)
+            && context.legal_actions.can_check();
         self.update_actor_stats(actor.index(), |stats| {
             stats.postflop_actions += 1;
             match action {
@@ -272,7 +280,16 @@ impl SessionStats {
                     stats.flop_cbet += 1;
                 }
             }
+            if is_turn_barrel_opportunity {
+                stats.turn_barrel_opportunities += 1;
+                if is_open_bet {
+                    stats.turn_barrel += 1;
+                }
+            }
         });
+        if street == Street::Flop && is_open_bet {
+            self.current.flop_cbetter = Some(actor);
+        }
     }
 
     fn update_actor_stats(&mut self, actor_index: usize, update: impl Fn(&mut SeatStats)) {
@@ -353,6 +370,23 @@ impl SessionStats {
                 write_cbet_stats_row(output, &format!("p{count}"), stats)?;
             }
         }
+        writeln!(output, "turn barrel stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "seat barrel")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write_turn_barrel_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_turn_barrel_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        writeln!(output, "turn barrel by dealt players:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "players barrel")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_turn_barrel_stats_row(output, &format!("p{count}"), stats)?;
+            }
+        }
         Ok(())
     }
 }
@@ -378,6 +412,8 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.postflop_check += stats.postflop_check;
     total.flop_cbet_opportunities += stats.flop_cbet_opportunities;
     total.flop_cbet += stats.flop_cbet;
+    total.turn_barrel_opportunities += stats.turn_barrel_opportunities;
+    total.turn_barrel += stats.turn_barrel;
 }
 
 fn write_stats_row(
@@ -427,6 +463,19 @@ fn write_cbet_stats_row(
         output,
         "{label} {}",
         format_rate(stats.flop_cbet, stats.flop_cbet_opportunities),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn write_turn_barrel_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{label} {}",
+        format_rate(stats.turn_barrel, stats.turn_barrel_opportunities),
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
@@ -2004,6 +2053,8 @@ mod tests {
         assert!(output.contains("postflop by dealt players:"));
         assert!(output.contains("flop continuation-bet stats:"));
         assert!(output.contains("flop continuation-bet by dealt players:"));
+        assert!(output.contains("turn barrel stats:"));
+        assert!(output.contains("turn barrel by dealt players:"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
         assert!(!output.contains("starting stacks:"));
