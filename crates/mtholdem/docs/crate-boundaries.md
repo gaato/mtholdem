@@ -184,6 +184,10 @@ peer-session handles. `mth_peer_*` remains the P2P artifact-routing boundary;
 `mth_table_*` is for local table events, explicit backend selection, bot seats,
 stack carry-over, and host action prompts. See
 [ADR-012](../../../docs/decisions/ADR-012-add-separate-table-runner-c-abi-surface.md).
+Both boundaries may expose the same public action context for prompts and bot
+decisions; `mth_peer_*` exposes it per local peer action request, while
+`mth_table_*` may expose it inside higher-level local table events. See
+[ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-action-requests.md).
 
 Custom bot clients that join an open game are ordinary participants, not a
 special table-runner mode. They should use `mth_peer_*`, own their identity and

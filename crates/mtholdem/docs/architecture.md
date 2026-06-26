@@ -180,7 +180,10 @@ use it only when answering `HostEffect::RequestAction`. The current policy is st
 it now exposes assessment, intent, and sizing stages before final legality mapping. Postflop
 assessment may later add bounded deterministic Monte Carlo equity while respecting public information
 boundaries.
-see [ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
+Peer-backed and rules-only hosts should feed it the same public action context
+so sizing does not depend on backend internals. See
+[ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md)
+and [ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-action-requests.md).
 
 ## Host table events and future runner
 
@@ -214,6 +217,11 @@ certification/announcement, recovery-bundle submission, showdown bundle publicat
 `ShowdownOpen` commitments, deterministic payout agreement, and final-hand effects with real
 `SignedPublicMessage`, `SignedPrivateReveal`, `ShowdownBundle`, `HandCryptography`, `HoldemHand`,
 `CertifiedCheckpoint`, `RecoveryBundle`, and `PublicTranscript` values.
+Action requests carry legal actions plus public betting context derived from
+the rules ledger. Hosts may use that context for UI prompts and bot decisions,
+but peer consensus still comes from submitted signed artifacts and rule
+validation. See
+[ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-action-requests.md).
 
 ## Per-hand flow
 
