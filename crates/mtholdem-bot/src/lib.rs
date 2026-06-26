@@ -133,6 +133,8 @@ pub struct BotDecisionContext {
     pub current_bet: Option<Chips>,
     /// Number of raises already made on this street, if known.
     pub street_raise_count: Option<u8>,
+    /// Whether the actor was the last preflop aggressor and can make a continuation bet.
+    pub postflop_initiative: Option<bool>,
 }
 
 impl BotDecisionContext {
@@ -162,6 +164,7 @@ impl BotDecisionContext {
             big_blind: None,
             current_bet: None,
             street_raise_count: None,
+            postflop_initiative: None,
         }
     }
 
@@ -269,6 +272,13 @@ impl BotDecisionContext {
     #[must_use]
     pub const fn with_street_raise_count(mut self, street_raise_count: u8) -> Self {
         self.street_raise_count = Some(street_raise_count);
+        self
+    }
+
+    /// Adds whether the actor has postflop betting initiative.
+    #[must_use]
+    pub const fn with_postflop_initiative(mut self, has_initiative: bool) -> Self {
+        self.postflop_initiative = Some(has_initiative);
         self
     }
 }
@@ -639,8 +649,23 @@ fn should_bet(
     context: &BotDecisionContext,
     assessment: HandAssessment,
 ) -> bool {
+    let initiative_bonus = postflop_initiative_bonus(context);
     legal_raise_bounds(context.legal_actions).is_some()
-        && assessment.score + profile.aggression.mul_add(0.20, profile.bluff_rate * 0.10) >= 0.63
+        && assessment.score
+            + profile.aggression.mul_add(0.20, profile.bluff_rate * 0.10)
+            + initiative_bonus
+            >= 0.63
+}
+
+fn postflop_initiative_bonus(context: &BotDecisionContext) -> f32 {
+    if context.street != Street::Flop || context.postflop_initiative != Some(true) {
+        return 0.0;
+    }
+    if context.live_opponents.unwrap_or(1) <= 1 {
+        0.08
+    } else {
+        0.03
+    }
 }
 
 fn should_fold(
@@ -1699,6 +1724,35 @@ mod tests {
         ])
         .with_pot(Chips::from_units(11))
         .with_live_opponents(1);
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
+    }
+
+    #[test]
+    fn balanced_bot_c_bets_overcards_with_flop_initiative() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            2,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::King, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Queen, mtholdem::Suit::Hearts),
+            Card::new(Rank::Seven, mtholdem::Suit::Clubs),
+            Card::new(Rank::Two, mtholdem::Suit::Spades),
+        ])
+        .with_pot(Chips::from_units(13))
+        .with_live_opponents(1)
+        .with_postflop_initiative(true);
         let mut rng = StdRng::seed_from_u64(1);
 
         assert!(matches!(

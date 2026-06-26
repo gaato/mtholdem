@@ -90,6 +90,7 @@ struct HandStats {
     pfr: Vec<bool>,
     voluntary_opened: bool,
     open_raiser: Option<Seat>,
+    last_preflop_raiser: Option<Seat>,
     dealt_player_count: usize,
 }
 
@@ -100,6 +101,7 @@ impl HandStats {
             pfr: vec![false; players],
             voluntary_opened: false,
             open_raiser: None,
+            last_preflop_raiser: None,
             dealt_player_count,
         }
     }
@@ -124,11 +126,11 @@ impl SessionStats {
     }
 
     fn start_hand(&mut self, stacks: &[Chips]) {
+        let dealt_player_count = stacks.iter().filter(|stack| !stack.is_zero()).count();
+        self.current = HandStats::new(self.seats.len(), dealt_player_count);
         if !self.enabled {
             return;
         }
-        let dealt_player_count = stacks.iter().filter(|stack| !stack.is_zero()).count();
-        self.current = HandStats::new(self.seats.len(), dealt_player_count);
         for (index, stack) in stacks.iter().enumerate() {
             if !stack.is_zero() {
                 self.seats[index].hands += 1;
@@ -146,15 +148,19 @@ impl SessionStats {
         context: &BotDecisionContext,
         action: BetAction,
     ) {
-        if !self.enabled || actor.index() >= self.seats.len() {
+        if actor.index() >= self.seats.len() {
             return;
         }
 
         if street == Street::Preflop {
             self.record_preflop_action(actor, context, action);
-        } else {
+        } else if self.enabled {
             self.record_postflop_action(actor, street, context, action);
         }
+    }
+
+    fn postflop_initiative(&self, actor: Seat, street: Street) -> bool {
+        street != Street::Preflop && self.current.last_preflop_raiser == Some(actor)
     }
 
     fn record_preflop_action(
@@ -230,6 +236,7 @@ impl SessionStats {
                 self.update_actor_stats(actor_index, |stats| stats.pfr += 1);
             }
             self.current.open_raiser.get_or_insert(actor);
+            self.current.last_preflop_raiser = Some(actor);
         }
 
         if is_voluntary {
@@ -247,7 +254,7 @@ impl SessionStats {
         let is_open_bet = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
             && context.current_bet == Some(Chips::ZERO);
         let is_flop_cbet_opportunity = street == Street::Flop
-            && self.current.open_raiser == Some(actor)
+            && self.current.last_preflop_raiser == Some(actor)
             && context.current_bet == Some(Chips::ZERO)
             && context.legal_actions.can_check();
         self.update_actor_stats(actor.index(), |stats| {
@@ -269,6 +276,9 @@ impl SessionStats {
     }
 
     fn update_actor_stats(&mut self, actor_index: usize, update: impl Fn(&mut SeatStats)) {
+        if !self.enabled {
+            return;
+        }
         update(&mut self.seats[actor_index]);
         if let Some(stats) = self
             .by_dealt_player_count
@@ -886,7 +896,8 @@ fn run_rules_only_hand(
                         .with_dealt_player_count(table.active_player_count())
                         .with_hole_cards(hole_cards[actor.index()])
                         .with_board(hand.board().to_vec())
-                        .with_action_context(action_context);
+                        .with_action_context(action_context)
+                        .with_postflop_initiative(stats.postflop_initiative(actor, street));
                 let action = if options.human == Some(actor) {
                     read_human_action(&context, input, output)?
                 } else {
@@ -1097,7 +1108,8 @@ impl InProcessHand {
                         .with_dealt_player_count(self.active_player_count)
                         .with_hole_cards(self.sessions[sender_index].local_hole_cards())
                         .with_board(board_cards(&self.sessions[sender_index]))
-                        .with_action_context(action_context);
+                        .with_action_context(action_context)
+                        .with_postflop_initiative(stats.postflop_initiative(actor, street));
                 let action = if human == Some(actor) {
                     read_human_action(&context, input, output)?
                 } else {
