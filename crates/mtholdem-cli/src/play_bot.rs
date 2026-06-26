@@ -58,6 +58,13 @@ struct SessionOutcome {
     completed_hands: u64,
     quit: bool,
     final_stacks: Vec<Chips>,
+    stats_total: Option<SeatStats>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EvaluationOptions {
+    runs: u64,
+    players: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -338,6 +345,17 @@ impl SessionStats {
         }
     }
 
+    fn total_stats(&self) -> Option<SeatStats> {
+        if !self.enabled {
+            return None;
+        }
+        let mut total = SeatStats::default();
+        for stats in &self.seats {
+            accumulate_stats(&mut total, stats);
+        }
+        Some(total)
+    }
+
     fn write_summary(&self, output: &mut impl Write) -> mtholdem::Result<()> {
         if !self.enabled {
             return Ok(());
@@ -349,10 +367,9 @@ impl SessionStats {
             "seat hands vpip pfr rfi 3bet fold-to-open cold-continue blind-defense"
         )
         .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-        let mut total = SeatStats::default();
-        for stats in &self.seats {
-            accumulate_stats(&mut total, stats);
-        }
+        let total = self
+            .total_stats()
+            .expect("enabled stats can always be accumulated");
         write_stats_row(output, "all", &total)?;
         for (index, stats) in self.seats.iter().enumerate() {
             write_stats_row(output, &format!("seat{index}"), stats)?;
@@ -647,6 +664,16 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
         print_play_bot_help();
         return Ok(());
     }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--eval-runs" | "--eval-players"))
+    {
+        let (options, evaluation) = parse_evaluation_options(args)?;
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        run_evaluation(options, evaluation, &mut output).map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     let options = parse_options(args)?;
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -667,6 +694,81 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
         println!("quit requested");
     }
     Ok(())
+}
+
+fn parse_evaluation_options(args: &[String]) -> Result<(Options, EvaluationOptions), String> {
+    let mut base_args = Vec::new();
+    let mut runs = None;
+    let mut players = Vec::new();
+    let mut human_explicit = false;
+    let mut watch_explicit = false;
+    let mut backend_explicit = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--eval-runs" => {
+                index += 1;
+                runs = Some(parse_hands(args, index)?);
+            }
+            "--eval-players" => {
+                index += 1;
+                players = parse_player_list(args.get(index).map(String::as_str))?;
+            }
+            "--human" => {
+                human_explicit = true;
+                base_args.push(args[index].clone());
+                index += 1;
+                base_args.push(
+                    args.get(index)
+                        .ok_or_else(|| "--human requires a value".to_owned())?
+                        .clone(),
+                );
+            }
+            "--watch-bot" => {
+                watch_explicit = true;
+                base_args.push(args[index].clone());
+                index += 1;
+                base_args.push(
+                    args.get(index)
+                        .ok_or_else(|| "--watch-bot requires a value".to_owned())?
+                        .clone(),
+                );
+            }
+            "--backend" => {
+                backend_explicit = true;
+                base_args.push(args[index].clone());
+                index += 1;
+                base_args.push(
+                    args.get(index)
+                        .ok_or_else(|| "--backend requires a value".to_owned())?
+                        .clone(),
+                );
+            }
+            _ => base_args.push(args[index].clone()),
+        }
+        index += 1;
+    }
+    let runs = runs.ok_or_else(|| "--eval-runs requires a positive run count".to_owned())?;
+    if human_explicit {
+        return Err("--eval-runs cannot be combined with --human".to_owned());
+    }
+    if watch_explicit {
+        return Err("--eval-runs cannot be combined with --watch-bot".to_owned());
+    }
+    let mut options = parse_options(&base_args)?;
+    options.human = None;
+    options.stats = true;
+    options.hands = Some(options.hands.unwrap_or(200));
+    if !backend_explicit {
+        options.backend = TableBackend::RulesOnly;
+    }
+    if players.is_empty() {
+        players.push(options.players);
+    }
+    for player_count in &players {
+        validate_player_count(*player_count)?;
+    }
+    Ok((options, EvaluationOptions { runs, players }))
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
@@ -724,7 +826,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         index += 1;
     }
     if !(2..=10).contains(&options.players) {
-        return Err("--players must be in 2..=10".to_owned());
+        validate_player_count(options.players)?;
     }
     if let Some(human) = options.human {
         if human.index() >= options.players {
@@ -741,6 +843,33 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         options.human = None;
     }
     Ok(options)
+}
+
+fn parse_player_list(value: Option<&str>) -> Result<Vec<usize>, String> {
+    let raw = value.ok_or_else(|| "--eval-players requires a comma-separated list".to_owned())?;
+    let mut players = Vec::new();
+    for part in raw.split(',') {
+        let player_count: usize = part
+            .trim()
+            .parse()
+            .map_err(|_| "--eval-players entries must be player counts".to_owned())?;
+        validate_player_count(player_count)?;
+        if !players.contains(&player_count) {
+            players.push(player_count);
+        }
+    }
+    if players.is_empty() {
+        return Err("--eval-players requires at least one player count".to_owned());
+    }
+    Ok(players)
+}
+
+fn validate_player_count(players: usize) -> Result<(), String> {
+    if (2..=10).contains(&players) {
+        Ok(())
+    } else {
+        Err("--players must be in 2..=10".to_owned())
+    }
 }
 
 fn parse_backend(value: Option<&str>) -> Result<TableBackend, String> {
@@ -793,7 +922,7 @@ fn parse_seat(value: Option<&str>) -> Result<Seat, String> {
 
 fn print_play_bot_help() {
     println!(
-        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only] [--stats] [--watch-bot SEAT]"
+        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only] [--stats] [--watch-bot SEAT] [--eval-runs N] [--eval-players LIST]"
     );
     println!("presets: nit, balanced, loose-passive, lag, maniac");
     println!("human seat defaults to seat0 and runs until quit; use --hands N to bound it");
@@ -806,11 +935,104 @@ fn print_play_bot_help() {
         "        in bots-only mode, --stats suppresses per-hand logs unless --watch-bot is set"
     );
     println!("--watch-bot SEAT runs that seat as a bot and prints its decision details");
+    println!("--eval-runs N runs compact bots-only evaluation rows across seed offsets");
+    println!("--eval-players LIST evaluates comma-separated player counts, such as 2,3,6,8");
     println!("board updates are printed as flop, turn, and river when cards open");
 }
 
 fn log_hands(options: Options) -> bool {
     !options.stats || options.human.is_some() || options.watch_bot.is_some()
+}
+
+fn run_evaluation(
+    mut options: Options,
+    evaluation: EvaluationOptions,
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "bot evaluation: preset={:?} backend={} hands={} runs={} base-seed={}",
+        options.preset,
+        options.backend.name(),
+        options.hands.unwrap_or(200),
+        evaluation.runs,
+        options.seed
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    writeln!(
+        output,
+        "players run seed completed player-hands vpip pfr rfi 3bet fold-to-open blind-defense cbet barrel postflop-bet postflop-raise survivors leader-net"
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    let base_seed = options.seed;
+    for player_count in evaluation.players {
+        options.players = player_count;
+        for run_index in 0..evaluation.runs {
+            options.seed = evaluation_seed(base_seed, player_count, run_index);
+            let mut input = io::empty();
+            let mut sink = io::sink();
+            let outcome = run_session(options, &mut input, &mut sink)?;
+            let stats = outcome.stats_total.as_ref().ok_or_else(|| {
+                mental_card_core::error::protocol("evaluation stats were not collected")
+            })?;
+            write_evaluation_row(
+                output,
+                player_count,
+                run_index,
+                options.seed,
+                &outcome,
+                stats,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn evaluation_seed(base_seed: u64, players: usize, run_index: u64) -> u64 {
+    base_seed
+        .wrapping_add(run_index)
+        .wrapping_add(u64::try_from(players).expect("player count fits u64") * 1_000_003)
+}
+
+fn write_evaluation_row(
+    output: &mut impl Write,
+    players: usize,
+    run_index: u64,
+    seed: u64,
+    outcome: &SessionOutcome,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{players} {run_index} {seed} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+        outcome.completed_hands,
+        stats.hands,
+        format_rate(stats.vpip, stats.hands),
+        format_rate(stats.pfr, stats.hands),
+        format_rate(stats.rfi, stats.rfi_opportunities),
+        format_rate(stats.three_bet, stats.three_bet_opportunities),
+        format_rate(stats.fold_to_open, stats.fold_to_open_opportunities),
+        format_rate(stats.blind_defense, stats.blind_defense_opportunities),
+        format_rate(stats.flop_cbet, stats.flop_cbet_opportunities),
+        format_rate(stats.turn_barrel, stats.turn_barrel_opportunities),
+        format_rate(stats.postflop_bet, stats.postflop_actions),
+        format_rate(stats.postflop_raise, stats.postflop_actions),
+        survivor_count(&outcome.final_stacks),
+        leader_net(&outcome.final_stacks),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn survivor_count(stacks: &[Chips]) -> usize {
+    stacks.iter().filter(|stack| !stack.is_zero()).count()
+}
+
+fn leader_net(stacks: &[Chips]) -> i128 {
+    stacks
+        .iter()
+        .map(|stack| i128::from(stack.units()) - 100)
+        .max()
+        .unwrap_or(0)
 }
 
 fn run_session(
@@ -830,10 +1052,12 @@ fn run_session(
     loop {
         if hand_limit.is_some_and(|limit| outcome.completed_hands >= limit) {
             stats.write_summary(output)?;
+            outcome.stats_total = stats.total_stats();
             return Ok(outcome);
         }
         if !table.can_continue() {
             stats.write_summary(output)?;
+            outcome.stats_total = stats.total_stats();
             return Ok(outcome);
         }
         let hand_number = HandNumber::from_u64(outcome.completed_hands);
@@ -857,6 +1081,7 @@ fn run_session(
             HandOutcome::Quit => {
                 outcome.quit = true;
                 stats.write_summary(output)?;
+                outcome.stats_total = stats.total_stats();
                 return Ok(outcome);
             }
         }
@@ -2145,6 +2370,87 @@ mod tests {
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
         assert!(!output.contains("starting stacks:"));
+    }
+
+    #[test]
+    fn eval_options_parse_player_matrix() {
+        let (options, evaluation) = parse_evaluation_options(&[
+            "--eval-runs".to_owned(),
+            "2".to_owned(),
+            "--eval-players".to_owned(),
+            "2,3,6".to_owned(),
+            "--hands".to_owned(),
+            "5".to_owned(),
+            "--seed".to_owned(),
+            "11".to_owned(),
+        ])
+        .expect("evaluation options parse");
+
+        assert_eq!(options.human, None);
+        assert!(options.stats);
+        assert_eq!(options.backend, TableBackend::RulesOnly);
+        assert_eq!(options.hands, Some(5));
+        assert_eq!(options.seed, 11);
+        assert_eq!(
+            evaluation,
+            EvaluationOptions {
+                runs: 2,
+                players: vec![2, 3, 6],
+            }
+        );
+    }
+
+    #[test]
+    fn eval_options_reject_human_and_watch_modes() {
+        assert!(
+            parse_evaluation_options(&[
+                "--eval-runs".to_owned(),
+                "1".to_owned(),
+                "--human".to_owned(),
+                "0".to_owned(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_evaluation_options(&[
+                "--eval-runs".to_owned(),
+                "1".to_owned(),
+                "--watch-bot".to_owned(),
+                "0".to_owned(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn evaluation_prints_compact_rows() {
+        let mut output = Vec::new();
+        run_evaluation(
+            Options {
+                players: 3,
+                seed: 7,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(2),
+                backend: TableBackend::RulesOnly,
+                stats: true,
+                watch_bot: None,
+            },
+            EvaluationOptions {
+                runs: 1,
+                players: vec![2, 3],
+            },
+            &mut output,
+        )
+        .expect("evaluation runs");
+
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("bot evaluation:"));
+        assert!(output.contains("players run seed completed player-hands"));
+        assert!(output.contains("2 0 "));
+        assert!(output.contains("3 0 "));
+        assert!(!output.contains("bot action stats:"));
+        assert!(!output.contains("=== hand"));
     }
 
     #[test]
