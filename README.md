@@ -34,6 +34,11 @@ API documentation for `main`: <https://gaato.github.io/mtholdem/>
 generic card cryptography, identities, rosters, or the deck state machine should
 depend directly on `mental-card-core`.
 
+Future target wrappers may include a Python package for research, equity
+calculation, transcript analysis, and bot diagnostics. That surface should be a
+Pythonic package over the Rust crates, not a second protocol implementation; see
+[ADR-017](docs/decisions/ADR-017-allow-python-package-as-research-and-analysis-wrapper.md).
+
 Crate-boundary rationale lives in
 [docs/crate-boundaries.md](docs/crate-boundaries.md).
 

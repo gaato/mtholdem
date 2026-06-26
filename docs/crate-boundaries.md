@@ -156,6 +156,12 @@ packages should live outside this workspace and consume the Rust adapter
 boundary. Godot GDExtension should also live outside this workspace and consume
 the C ABI.
 
+A future Python package is a separate wrapper surface for research, analysis,
+equity calculation, and bot diagnostics. It should prefer a Pythonic
+PyO3/maturin wrapper over the Rust crates rather than using the C ABI by
+default; see
+[ADR-017](decisions/ADR-017-allow-python-package-as-research-and-analysis-wrapper.md).
+
 `mtholdem-bot` is a host-side policy crate, not a protocol crate. It chooses
 legal betting actions for demos from public context, known local hole cards, and
 the rules engine's `LegalActions`. It does not drive peer sessions, interpret
