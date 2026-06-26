@@ -80,6 +80,8 @@ struct SeatStats {
     postflop_call: u64,
     postflop_fold: u64,
     postflop_check: u64,
+    flop_cbet_opportunities: u64,
+    flop_cbet: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -151,7 +153,7 @@ impl SessionStats {
         if street == Street::Preflop {
             self.record_preflop_action(actor, context, action);
         } else {
-            self.record_postflop_action(actor, context, action);
+            self.record_postflop_action(actor, street, context, action);
         }
     }
 
@@ -238,21 +240,30 @@ impl SessionStats {
     fn record_postflop_action(
         &mut self,
         actor: Seat,
+        street: Street,
         context: &BotDecisionContext,
         action: BetAction,
     ) {
+        let is_open_bet = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
+            && context.current_bet == Some(Chips::ZERO);
+        let is_flop_cbet_opportunity = street == Street::Flop
+            && self.current.open_raiser == Some(actor)
+            && context.current_bet == Some(Chips::ZERO)
+            && context.legal_actions.can_check();
         self.update_actor_stats(actor.index(), |stats| {
             stats.postflop_actions += 1;
             match action {
-                BetAction::RaiseTo(_) | BetAction::AllIn
-                    if context.current_bet == Some(Chips::ZERO) =>
-                {
-                    stats.postflop_bet += 1;
-                }
+                BetAction::RaiseTo(_) | BetAction::AllIn if is_open_bet => stats.postflop_bet += 1,
                 BetAction::RaiseTo(_) | BetAction::AllIn => stats.postflop_raise += 1,
                 BetAction::Call => stats.postflop_call += 1,
                 BetAction::Fold => stats.postflop_fold += 1,
                 BetAction::Check => stats.postflop_check += 1,
+            }
+            if is_flop_cbet_opportunity {
+                stats.flop_cbet_opportunities += 1;
+                if is_open_bet {
+                    stats.flop_cbet += 1;
+                }
             }
         });
     }
@@ -315,6 +326,23 @@ impl SessionStats {
                 write_postflop_stats_row(output, &format!("p{count}"), stats)?;
             }
         }
+        writeln!(output, "flop continuation-bet stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "seat cbet")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write_cbet_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_cbet_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        writeln!(output, "flop continuation-bet by dealt players:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "players cbet")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_cbet_stats_row(output, &format!("p{count}"), stats)?;
+            }
+        }
         Ok(())
     }
 }
@@ -338,6 +366,8 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.postflop_call += stats.postflop_call;
     total.postflop_fold += stats.postflop_fold;
     total.postflop_check += stats.postflop_check;
+    total.flop_cbet_opportunities += stats.flop_cbet_opportunities;
+    total.flop_cbet += stats.flop_cbet;
 }
 
 fn write_stats_row(
@@ -374,6 +404,19 @@ fn write_postflop_stats_row(
         format_rate(stats.postflop_call, stats.postflop_actions),
         format_rate(stats.postflop_fold, stats.postflop_actions),
         format_rate(stats.postflop_check, stats.postflop_actions),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn write_cbet_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{label} {}",
+        format_rate(stats.flop_cbet, stats.flop_cbet_opportunities),
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
@@ -1947,6 +1990,8 @@ mod tests {
         assert!(output.contains("postflop action stats:"));
         assert!(output.contains("seat actions bet raise call fold check"));
         assert!(output.contains("postflop by dealt players:"));
+        assert!(output.contains("flop continuation-bet stats:"));
+        assert!(output.contains("flop continuation-bet by dealt players:"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
         assert!(!output.contains("starting stacks:"));
