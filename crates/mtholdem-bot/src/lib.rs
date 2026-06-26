@@ -585,7 +585,7 @@ fn should_bet(
     assessment: HandAssessment,
 ) -> bool {
     legal_raise_bounds(context.legal_actions).is_some()
-        && assessment.score + profile.aggression.mul_add(0.20, profile.bluff_rate * 0.10) >= 0.72
+        && assessment.score + profile.aggression.mul_add(0.20, profile.bluff_rate * 0.10) >= 0.63
 }
 
 fn should_fold(
@@ -593,7 +593,7 @@ fn should_fold(
     context: &BotDecisionContext,
     assessment: HandAssessment,
 ) -> bool {
-    let threshold = 0.47 - (profile.call_bias * 0.14) + call_cost_ratio(context) * 0.28;
+    let threshold = 0.38 - (profile.call_bias * 0.14) + call_cost_ratio(context) * 0.18;
     assessment.score < threshold
 }
 
@@ -1087,6 +1087,38 @@ mod tests {
         hand.legal_actions().expect("postflop legal")
     }
 
+    fn heads_up_facing_flop_bet_context(
+        preflop_actions: &[(usize, BetAction)],
+        flop: [Card; 3],
+        bettor: usize,
+        bet: u64,
+        actor: usize,
+    ) -> BotDecisionContext {
+        let stacks = [Chips::from_units(100), Chips::from_units(100)];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        for (seat, action) in preflop_actions.iter().copied() {
+            hand.apply_action(Seat::new(seat).expect("seat"), action)
+                .expect("preflop action");
+        }
+        hand.open_flop(flop).expect("open flop");
+        hand.apply_action(
+            Seat::new(bettor).expect("bettor"),
+            BetAction::RaiseTo(Chips::from_units(bet)),
+        )
+        .expect("bet");
+        let actor = Seat::new(actor).expect("actor");
+        assert_eq!(hand.next_to_act(), Some(actor));
+        BotDecisionContext::new(2, actor, Street::Flop, hand.legal_actions().expect("legal"))
+            .with_action_context(hand.action_context().expect("context"))
+    }
+
     fn big_blind_after_limpers_context() -> BotDecisionContext {
         let stacks = [Chips::from_units(100); 5];
         let mut hand = mtholdem::holdem::HoldemHand::new(
@@ -1348,6 +1380,127 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         let action = bot.choose_action(&context, &mut rng);
         assert!(matches!(action, BetAction::RaiseTo(amount) if amount.units() > 2));
+    }
+
+    #[test]
+    fn balanced_bot_bets_strong_draw_when_checked_to() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            2,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Hearts),
+            Card::new(Rank::Five, mtholdem::Suit::Spades),
+        ]))
+        .with_board([
+            Card::new(Rank::Four, mtholdem::Suit::Spades),
+            Card::new(Rank::Three, mtholdem::Suit::Spades),
+            Card::new(Rank::Eight, mtholdem::Suit::Spades),
+        ])
+        .with_pot(Chips::from_units(10))
+        .with_live_opponents(1);
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
+    }
+
+    #[test]
+    fn balanced_bot_bets_top_pair_when_checked_to() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = BotDecisionContext::new(
+            2,
+            Seat::new(0).expect("seat"),
+            Street::Flop,
+            open_bet_legal(),
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Five, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Jack, mtholdem::Suit::Hearts),
+            Card::new(Rank::Four, mtholdem::Suit::Spades),
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+        ])
+        .with_pot(Chips::from_units(11))
+        .with_live_opponents(1);
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
+    }
+
+    #[test]
+    fn balanced_bot_continues_with_showdown_pair_against_small_bet() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = heads_up_facing_flop_bet_context(
+            &[
+                (0, BetAction::RaiseTo(Chips::from_units(5))),
+                (1, BetAction::RaiseTo(Chips::from_units(11))),
+                (0, BetAction::Call),
+            ],
+            [
+                Card::new(Rank::Eight, mtholdem::Suit::Diamonds),
+                Card::new(Rank::Two, mtholdem::Suit::Diamonds),
+                Card::new(Rank::Jack, mtholdem::Suit::Spades),
+            ],
+            1,
+            10,
+            0,
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ten, mtholdem::Suit::Spades),
+            Card::new(Rank::Ten, mtholdem::Suit::Hearts),
+        ]))
+        .with_board([
+            Card::new(Rank::Eight, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Two, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Jack, mtholdem::Suit::Spades),
+        ]);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_ne!(decision.action, BetAction::Fold, "{decision:?}");
+    }
+
+    #[test]
+    fn balanced_bot_continues_with_top_pair_against_modest_bet() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = heads_up_facing_flop_bet_context(
+            &[
+                (0, BetAction::RaiseTo(Chips::from_units(5))),
+                (1, BetAction::Call),
+            ],
+            [
+                Card::new(Rank::Jack, mtholdem::Suit::Hearts),
+                Card::new(Rank::Four, mtholdem::Suit::Spades),
+                Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            ],
+            1,
+            6,
+            0,
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Five, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Jack, mtholdem::Suit::Hearts),
+            Card::new(Rank::Four, mtholdem::Suit::Spades),
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+        ]);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert_ne!(decision.action, BetAction::Fold, "{decision:?}");
     }
 
     #[test]
