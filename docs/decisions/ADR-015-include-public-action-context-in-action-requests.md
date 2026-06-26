@@ -33,6 +33,7 @@ request boundary.
 The context should be produced by `mtholdem` from the public betting ledger and
 carried through `mtholdem-peer::HostEffect::RequestAction`. It may include:
 
+- dealer button seat;
 - current pot size;
 - actor stack;
 - actor contribution on the current street;
@@ -42,10 +43,10 @@ carried through `mtholdem-peer::HostEffect::RequestAction`. It may include:
 - big blind.
 
 `mtholdem-bot` should consume this context through `BotDecisionContext`. The
-bot may use it for limper-aware preflop isolation sizing, pot-relative postflop
-sizing, pressure assessment, and future bounded Monte Carlo tuning. The bot
-must still use only the acting seat's known hole cards, public board cards,
-legal actions, and public action context.
+bot may use it for position-aware preflop range skeletons, limper-aware preflop
+isolation sizing, pot-relative postflop sizing, pressure assessment, and future
+bounded Monte Carlo tuning. The bot must still use only the acting seat's known
+hole cards, public board cards, legal actions, and public action context.
 
 The peer effect remains low-level and transport-neutral. It does not choose a
 bot action, advise a human, expose hidden opponent cards, or become a table

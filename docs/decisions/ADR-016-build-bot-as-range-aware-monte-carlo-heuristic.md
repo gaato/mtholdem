@@ -94,6 +94,12 @@ street bet rates, showdown rate, and win rate by seat. Preset names are labels
 for intended tendencies; they should be validated against these observable
 statistics instead of assumed from their names.
 
+The CLI now exposes the first calibration surface with `play-bot --stats`.
+That summary is intentionally a red-signal tool, not a solver objective: it
+should catch broken behavior such as near-zero PFR, no RFI, no blind defense, or
+fold-to-open near 100%, while leaving final profile tuning to broader manual and
+simulation review.
+
 For the initial `Balanced` target, use human baseline ranges as guardrails
 rather than exact promises. At an eight-player, roughly 50 big blind table, a
 reasonable first target is about 18-26% VPIP, 12-20% PFR, 30-45% button steal,

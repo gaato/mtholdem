@@ -136,12 +136,13 @@ impl SessionStats {
         let is_raise = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
             && context.legal_actions.minimum_raise_to().is_some();
         let is_voluntary = is_call || is_raise;
-        let unopened_blinds = context
-            .big_blind
-            .zip(context.current_bet)
-            .is_some_and(|(big_blind, current_bet)| {
-                current_bet == big_blind && !context.legal_actions.can_check()
-            });
+        let unopened_blinds =
+            context
+                .big_blind
+                .zip(context.current_bet)
+                .is_some_and(|(big_blind, current_bet)| {
+                    current_bet == big_blind && !context.legal_actions.can_check()
+                });
 
         if unopened_blinds && !self.current.voluntary_opened {
             self.seats[actor_index].rfi_opportunities += 1;
@@ -254,7 +255,11 @@ fn format_rate(numerator: u64, denominator: u64) -> String {
         return "-".to_owned();
     }
     let percent = numerator.saturating_mul(1000) / denominator;
-    format!("{}.{:01}%({numerator}/{denominator})", percent / 10, percent % 10)
+    format!(
+        "{}.{:01}%({numerator}/{denominator})",
+        percent / 10,
+        percent % 10
+    )
 }
 
 #[derive(Clone, Debug)]
