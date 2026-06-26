@@ -185,14 +185,14 @@ value, and pressure fold.
 Peer-backed and rules-only hosts should feed it the same public action context
 so decisions do not depend on backend internals. See
 [ADR-018](decisions/ADR-018-reframe-bot-policy-around-classic-poker-motives.md),
-[ADR-013](decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md),
 and [ADR-015](decisions/ADR-015-include-public-action-context-in-action-requests.md).
 The opponent-quality target remains a range-aware Monte Carlo heuristic, not a
 solver or self-play system; see
 [ADR-016](decisions/ADR-016-build-bot-as-range-aware-monte-carlo-heuristic.md).
 Preset tuning should be driven by aggregate bot telemetry such as VPIP, PFR,
 RFI, 3-bet, steal, blind-defense, street-bet, showdown, and seat win-rate
-metrics rather than by individual short transcripts.
+metrics, plus aggregate `BotDecision` motive counts, rather than by individual
+short transcripts.
 Those metrics should be checked against human-oriented no-limit Hold'em
 baselines such as position-aware tight-aggressive opening, small unopened
 preflop raises, pot-odds-aware calls, and lower multiway continuation-bet

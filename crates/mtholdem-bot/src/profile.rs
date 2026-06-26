@@ -81,9 +81,7 @@ impl BotPreset {
 }
 
 const fn clamp01(value: f32) -> f32 {
-    if value.is_nan() {
-        0.0
-    } else if value < 0.0 {
+    if value.is_nan() || value < 0.0 {
         0.0
     } else if value > 1.0 {
         1.0

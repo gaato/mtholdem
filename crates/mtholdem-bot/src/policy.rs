@@ -732,10 +732,8 @@ fn draw_class(context: &BotDecisionContext) -> DrawClass {
         (true, None, _) => DrawClass::FlushDraw,
         (false, Some(DrawClass::OpenEnded), _) => DrawClass::OpenEnded,
         (false, Some(DrawClass::Gutshot), _) => DrawClass::Gutshot,
-        (false, Some(_), 1..) => DrawClass::Overcards,
-        (false, Some(_), 0) => DrawClass::None,
-        (false, None, 1..) => DrawClass::Overcards,
-        (false, None, 0) => DrawClass::None,
+        (false, _, 1..) => DrawClass::Overcards,
+        (false, _, 0) => DrawClass::None,
     }
 }
 
@@ -1044,9 +1042,8 @@ fn opponent_range_class(context: &BotDecisionContext, profile: BotProfile) -> Op
     if context.street == Street::Preflop {
         return match preflop_spot(context) {
             Some(PreflopSpot::FirstIn | PreflopSpot::BigBlindOption) => OpponentRangeClass::Broad,
-            Some(PreflopSpot::LimpedPot) => OpponentRangeClass::Continuing,
             Some(PreflopSpot::FacingRaise) => OpponentRangeClass::Tight,
-            None => OpponentRangeClass::Continuing,
+            Some(PreflopSpot::LimpedPot) | None => OpponentRangeClass::Continuing,
         };
     }
     let range_floor = opponent_range_floor(context, profile);

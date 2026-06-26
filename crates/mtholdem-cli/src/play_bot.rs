@@ -20,6 +20,22 @@ use rand::seq::SliceRandom;
 const DEFAULT_PLAYERS: usize = 3;
 const DEFAULT_SEED: u64 = 7;
 const MAX_STEPS: usize = 20_000;
+const MOTIVE_COUNT: usize = 13;
+const MOTIVE_LABELS: [&str; MOTIVE_COUNT] = [
+    "value",
+    "protection",
+    "bluff",
+    "semi-bluff",
+    "pot-odds-call",
+    "showdown-value",
+    "steal",
+    "isolation",
+    "gap-fold",
+    "pressure-fold",
+    "give-up",
+    "free-card",
+    "all-in-pressure",
+];
 
 #[derive(Clone, Copy, Debug)]
 struct Options {
@@ -94,6 +110,8 @@ struct SeatStats {
     flop_cbet: u64,
     turn_barrel_opportunities: u64,
     turn_barrel: u64,
+    motive_actions: u64,
+    motive_counts: [u64; MOTIVE_COUNT],
 }
 
 #[derive(Clone, Debug)]
@@ -201,6 +219,17 @@ impl SessionStats {
         } else if self.enabled {
             self.record_postflop_action(actor, street, context, action);
         }
+    }
+
+    fn record_bot_decision(&mut self, actor: Seat, decision: &BotDecision) {
+        if actor.index() >= self.seats.len() {
+            return;
+        }
+        let motive_index = motive_index(decision.motive);
+        self.update_actor_stats(actor.index(), |stats| {
+            stats.motive_actions += 1;
+            stats.motive_counts[motive_index] += 1;
+        });
     }
 
     fn postflop_initiative(&self, actor: Seat, street: Street) -> bool {
@@ -482,6 +511,33 @@ impl SessionStats {
                 write_turn_barrel_stats_row(output, &format!("p{count}"), stats)?;
             }
         }
+        writeln!(output, "bot motive stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write!(output, "seat actions")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for label in MOTIVE_LABELS {
+            write!(output, " {label}")
+                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        }
+        writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write_motive_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_motive_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        writeln!(output, "bot motive by dealt players:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write!(output, "players actions")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for label in MOTIVE_LABELS {
+            write!(output, " {label}")
+                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        }
+        writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_motive_stats_row(output, &format!("p{count}"), stats)?;
+            }
+        }
         Ok(())
     }
 }
@@ -514,6 +570,14 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.flop_cbet += stats.flop_cbet;
     total.turn_barrel_opportunities += stats.turn_barrel_opportunities;
     total.turn_barrel += stats.turn_barrel;
+    total.motive_actions += stats.motive_actions;
+    for (total_count, count) in total
+        .motive_counts
+        .iter_mut()
+        .zip(stats.motive_counts.iter().copied())
+    {
+        *total_count += count;
+    }
 }
 
 fn chip_delta(start: Chips, end: Chips) -> i128 {
@@ -618,6 +682,20 @@ fn write_turn_barrel_stats_row(
         format_rate(stats.turn_barrel, stats.turn_barrel_opportunities),
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn write_motive_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    write!(output, "{label} {}", stats.motive_actions)
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    for count in stats.motive_counts {
+        write!(output, " {count}")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    }
+    writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
 
 fn format_rate(numerator: u64, denominator: u64) -> String {
@@ -982,7 +1060,9 @@ fn print_play_bot_help() {
     println!("human seats: 0, 1, ... or seat0, seat1, ...");
     println!("human actions: fold, check, call, bet N, raise N, quit");
     println!("backends: peer, rules-only");
-    println!("--stats prints preflop rates, postflop action frequencies, and dealt-count splits");
+    println!(
+        "--stats prints action rates, motive counts, postflop frequencies, and dealt-count splits"
+    );
     println!(
         "        in bots-only mode, --stats suppresses per-hand logs unless --watch-bot is set"
     );
@@ -1315,22 +1395,21 @@ fn run_rules_only_hand(
                         .with_board(hand.board().to_vec())
                         .with_action_context(action_context)
                         .with_postflop_initiative(stats.postflop_initiative(actor, street));
-                let action = if options.human == Some(actor) {
-                    read_human_action(&context, input, output)?
+                let (action, bot_decision) = if options.human == Some(actor) {
+                    match read_human_action(&context, input, output)? {
+                        HumanInput::Action(action) => (action, None),
+                        HumanInput::Quit => return Ok(HandOutcome::Quit),
+                    }
                 } else {
-                    HumanInput::Action(choose_bot_action(
-                        bot,
-                        &context,
-                        &mut rng,
-                        options.watch_bot,
-                        output,
-                    )?)
-                };
-                let HumanInput::Action(action) = action else {
-                    return Ok(HandOutcome::Quit);
+                    let decision =
+                        choose_bot_decision(bot, &context, &mut rng, options.watch_bot, output)?;
+                    (decision.action, Some(decision))
                 };
                 if log_hands {
                     write_action(actor, street, action, legal_actions, output)?;
+                }
+                if let Some(decision) = bot_decision.as_ref() {
+                    stats.record_bot_decision(actor, decision);
                 }
                 stats.record_action(actor, street, &context, action);
                 hand.apply_action(actor, action)?;
@@ -1527,22 +1606,26 @@ impl InProcessHand {
                         .with_board(board_cards(&self.sessions[sender_index]))
                         .with_action_context(action_context)
                         .with_postflop_initiative(stats.postflop_initiative(actor, street));
-                let action = if human == Some(actor) {
-                    read_human_action(&context, input, output)?
+                let (action, bot_decision) = if human == Some(actor) {
+                    match read_human_action(&context, input, output)? {
+                        HumanInput::Action(action) => (action, None),
+                        HumanInput::Quit => return Ok(true),
+                    }
                 } else {
-                    HumanInput::Action(choose_bot_action(
+                    let decision = choose_bot_decision(
                         self.bot,
                         &context,
                         &mut self.bot_rng,
                         self.watch_bot,
                         output,
-                    )?)
-                };
-                let HumanInput::Action(action) = action else {
-                    return Ok(true);
+                    )?;
+                    (decision.action, Some(decision))
                 };
                 if self.log_hands {
                     write_action(actor, street, action, legal_actions, output)?;
+                }
+                if let Some(decision) = bot_decision.as_ref() {
+                    stats.record_bot_decision(actor, decision);
                 }
                 stats.record_action(actor, street, &context, action);
                 self.sessions[sender_index].submit_action(action)?;
@@ -1684,18 +1767,18 @@ fn write_showdown_summary(
     writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
 
-fn choose_bot_action(
+fn choose_bot_decision(
     bot: HeuristicBot,
     context: &BotDecisionContext,
     rng: &mut impl rand::Rng,
     watch_bot: Option<Seat>,
     output: &mut impl Write,
-) -> mtholdem::Result<BetAction> {
+) -> mtholdem::Result<BotDecision> {
     let decision = bot.decide(context, rng);
     if watch_bot == Some(context.actor) {
         write_bot_watch(context, &decision, output)?;
     }
-    Ok(decision.action)
+    Ok(decision)
 }
 
 fn write_bot_watch(
@@ -1795,20 +1878,24 @@ fn format_float(value: f32) -> String {
 }
 
 const fn format_motive(motive: BettingMotive) -> &'static str {
+    MOTIVE_LABELS[motive_index(motive)]
+}
+
+const fn motive_index(motive: BettingMotive) -> usize {
     match motive {
-        BettingMotive::Value => "value",
-        BettingMotive::Protection => "protection",
-        BettingMotive::Bluff => "bluff",
-        BettingMotive::SemiBluff => "semi-bluff",
-        BettingMotive::PotOddsCall => "pot-odds-call",
-        BettingMotive::ShowdownValue => "showdown-value",
-        BettingMotive::Steal => "steal",
-        BettingMotive::Isolation => "isolation",
-        BettingMotive::GapFold => "gap-fold",
-        BettingMotive::PressureFold => "pressure-fold",
-        BettingMotive::GiveUp => "give-up",
-        BettingMotive::FreeCard => "free-card",
-        BettingMotive::AllInPressure => "all-in-pressure",
+        BettingMotive::Value => 0,
+        BettingMotive::Protection => 1,
+        BettingMotive::Bluff => 2,
+        BettingMotive::SemiBluff => 3,
+        BettingMotive::PotOddsCall => 4,
+        BettingMotive::ShowdownValue => 5,
+        BettingMotive::Steal => 6,
+        BettingMotive::Isolation => 7,
+        BettingMotive::GapFold => 8,
+        BettingMotive::PressureFold => 9,
+        BettingMotive::GiveUp => 10,
+        BettingMotive::FreeCard => 11,
+        BettingMotive::AllInPressure => 12,
     }
 }
 
@@ -2442,6 +2529,12 @@ mod tests {
         assert!(output.contains("flop continuation-bet by dealt players:"));
         assert!(output.contains("turn barrel stats:"));
         assert!(output.contains("turn barrel by dealt players:"));
+        assert!(output.contains("bot motive stats:"));
+        assert!(
+            output
+                .contains("actions value protection bluff semi-bluff pot-odds-call showdown-value")
+        );
+        assert!(output.contains("bot motive by dealt players:"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
         assert!(!output.contains("starting stacks:"));
