@@ -170,9 +170,11 @@ single-player shells may use it to answer `RequestAction` effects while keeping
 the peer/session loop in the host. See
 [ADR-010](decisions/ADR-010-keep-bot-policy-host-side.md) for the single-player
 and human-input boundary. The bot policy is pre-stable and now exposes
-assessment, intent, and sizing stages; bounded Monte Carlo equity can be added
-inside that assessment stage later. See
+assessment, intent, and sizing stages; its assessment includes bounded Monte
+Carlo equity over unknown cards and lightweight public range assumptions. See
 [ADR-013](decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
+Preset tuning should be validated with aggregate telemetry as described in
+[ADR-016](decisions/ADR-016-build-bot-as-range-aware-monte-carlo-heuristic.md).
 
 Multi-hand table/session running is also host-side orchestration. Stack
 carry-over, button rotation, busted-seat handling, human-seat prompts, bot-seat

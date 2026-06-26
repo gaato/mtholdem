@@ -187,6 +187,9 @@ and [ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-a
 The opponent-quality target remains a range-aware Monte Carlo heuristic, not a
 solver or self-play system; see
 [ADR-016](../../../docs/decisions/ADR-016-build-bot-as-range-aware-monte-carlo-heuristic.md).
+Preset tuning should be driven by aggregate bot telemetry such as VPIP, PFR,
+RFI, 3-bet, steal, blind-defense, street-bet, showdown, and seat win-rate
+metrics rather than by individual short transcripts.
 
 ## Host table events and future runner
 

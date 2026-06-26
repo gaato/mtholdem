@@ -60,10 +60,19 @@ bot may spend a bounded number of trials before returning a `BotDecision`.
 Async, threaded, or incremental polling APIs are not required until a host needs
 frame-budgeted calculation.
 
-Diagnostics should expose enough data for CLI and Godot debug views to explain
-bot behavior: estimated equity, made-hand category, draw potential, sampled
-opponent count/range class, pressure, intent, sizing family, and final legal
-action.
+Diagnostics should expose enough per-action data for CLI and Godot debug views
+to explain bot behavior: estimated equity, made-hand category, draw potential,
+sampled opponent count/range class, pressure, intent, sizing family, and final
+legal action.
+
+Preset tuning must also be driven by aggregate telemetry rather than single log
+read-throughs. A 31-hand transcript can suggest a problem, but it is not enough
+to calibrate a bot profile. Before changing `Balanced` or other preset
+thresholds, run bot-only simulations over hundreds or thousands of hands and
+inspect at least VPIP, PFR, RFI, 3-bet rate, button steal rate, blind defense,
+street bet rates, showdown rate, and win rate by seat. Preset names are labels
+for intended tendencies; they should be validated against these observable
+statistics instead of assumed from their names.
 
 ## Alternatives Considered
 
@@ -108,6 +117,10 @@ action.
 - Public action context from ADR-015 becomes more important because simulation
   output is only useful when intent and sizing also see pot, stacks, blinds,
   live opponents, and action history.
+- CLI and future host shells should grow a bot telemetry mode before further
+  preset tuning. A likely shape is a bot-only simulation summary that reports
+  VPIP, PFR, RFI, 3-bet, steal, blind-defense, street-bet, showdown, and
+  seat-level win-rate metrics for each preset.
 
 ## Implementation References
 - eval7: https://github.com/julianandrews/pyeval7
