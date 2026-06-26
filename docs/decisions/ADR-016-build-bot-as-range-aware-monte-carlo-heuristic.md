@@ -109,7 +109,31 @@ action.
   output is only useful when intent and sizing also see pot, stacks, blinds,
   live opponents, and action history.
 
-## References
+## Implementation References
+- eval7: https://github.com/julianandrews/pyeval7
+  - Useful reference for PokerStove-style range parsing, weighted hand ranges,
+    and hand-vs-range equity APIs.
+- pbots_calc: https://github.com/mitpokerbots/pbots_calc
+  - Useful reference for a compact ranged equity calculator interface.
+- PokerStove: https://github.com/andrewprock/pokerstove
+  - Useful reference for range-vs-range equity as a product concept and
+    text-range vocabulary.
+- PyPokerEngine: https://github.com/ishikota/PyPokerEngine
+  - Useful reference for agent callbacks, valid-action prompts, round state,
+    and emulator-style simulations.
+- RLCard: https://rlcard.org/
+  - Useful reference for separating environments, agents, and evaluation
+    harnesses.
+- OpenSpiel: https://github.com/google-deepmind/open_spiel
+  - Useful reference for research-grade imperfect-information game APIs and
+    algorithms, not as a direct dependency target.
+
+These projects are implementation references, not source-code sources. Before
+copying code, run a separate license and provenance review. The initial
+`mtholdem-bot` implementation should build its own small range and Monte Carlo
+modules against the workspace's card, rules, and information-boundary types.
+
+## Research References
 - DeepStack: https://arxiv.org/abs/1701.01724
 - Safe and nested subgame solving / Libratus: https://arxiv.org/abs/1705.02955
 - DecisionHoldem: https://arxiv.org/abs/2201.11580
