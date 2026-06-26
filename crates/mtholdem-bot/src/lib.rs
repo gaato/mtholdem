@@ -640,8 +640,14 @@ fn should_raise(
     let depth_penalty = f32::from(raise_depth) * 0.10;
     let call_ratio_penalty = call_cost_ratio(context) * 0.20;
     let threshold = 0.82 + depth_penalty + call_ratio_penalty - profile.aggression * 0.18;
+    let monster_value = assessment
+        .category
+        .is_some_and(|category| category >= HandCategory::ThreeOfAKind)
+        && assessment.strength >= 0.78
+        && assessment.score >= 0.66;
     assessment.score >= threshold
         && (assessment.strength >= 0.72 || profile.bluff_rate > 0.18 && assessment.score >= 0.76)
+        || monster_value
 }
 
 fn near_all_in(context: &BotDecisionContext, assessment: HandAssessment) -> bool {
@@ -1652,6 +1658,41 @@ mod tests {
         let decision = bot.decide(&context, &mut rng);
 
         assert_ne!(decision.action, BetAction::Fold, "{decision:?}");
+    }
+
+    #[test]
+    fn balanced_bot_raises_trips_for_value_against_bet() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = heads_up_facing_flop_bet_context(
+            &[
+                (0, BetAction::RaiseTo(Chips::from_units(5))),
+                (1, BetAction::Call),
+            ],
+            [
+                Card::new(Rank::Five, mtholdem::Suit::Diamonds),
+                Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+                Card::new(Rank::Ace, mtholdem::Suit::Spades),
+            ],
+            1,
+            7,
+            0,
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Queen, mtholdem::Suit::Diamonds),
+        ]))
+        .with_board([
+            Card::new(Rank::Five, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::Ace, mtholdem::Suit::Spades),
+        ]);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert!(
+            matches!(decision.action, BetAction::RaiseTo(_)),
+            "{decision:?}"
+        );
     }
 
     #[test]
