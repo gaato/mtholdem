@@ -515,10 +515,8 @@ fn open_threshold(profile: BotProfile, position: f32, short_handed: f32) -> f32 
 }
 
 fn defend_threshold(profile: BotProfile, context: &BotDecisionContext, short_handed: f32) -> f32 {
-    let posted_blind = context
-        .actor_street_contributed
-        .is_some_and(|contributed| contributed > Chips::ZERO);
-    let blind_discount = if posted_blind { 0.06 } else { 0.0 };
+    let blind_discount = blind_defense_discount(context);
+    let posted_blind = blind_discount > 0.0;
     let price_discount = call_cost_ratio(context).min(0.22) * 0.22;
     let full_ring_penalty = scaled_count_penalty(dealt_player_count(context), 0.006).min(0.04);
     let multiway_penalty = context.matched_bet_opponents.map_or(0.0, |matched| {
@@ -534,6 +532,23 @@ fn defend_threshold(profile: BotProfile, context: &BotDecisionContext, short_han
         + cold_call_penalty
         + raise_depth_penalty)
         .clamp(0.34, 0.86)
+}
+
+fn blind_defense_discount(context: &BotDecisionContext) -> f32 {
+    let Some(contributed) = context.actor_street_contributed else {
+        return 0.0;
+    };
+    if contributed.is_zero() {
+        return 0.0;
+    }
+    if context
+        .big_blind
+        .is_some_and(|big_blind| contributed >= big_blind)
+    {
+        0.10
+    } else {
+        0.04
+    }
 }
 
 fn three_bet_threshold(profile: BotProfile, context: &BotDecisionContext) -> f32 {
@@ -1273,6 +1288,36 @@ mod tests {
         .with_action_context(hand.action_context().expect("context"))
     }
 
+    fn full_ring_big_blind_facing_open_context() -> BotDecisionContext {
+        let stacks = [Chips::from_units(100); 8];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        hand.apply_action(
+            Seat::new(3).expect("utg"),
+            BetAction::RaiseTo(Chips::from_units(6)),
+        )
+        .expect("open");
+        for index in [4, 5, 6, 7, 0, 1] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Fold)
+                .expect("fold");
+        }
+        let actor = Seat::new(2).expect("big blind");
+        assert_eq!(hand.next_to_act(), Some(actor));
+        BotDecisionContext::new(
+            8,
+            actor,
+            Street::Preflop,
+            hand.legal_actions().expect("legal"),
+        )
+        .with_action_context(hand.action_context().expect("context"))
+    }
+
     fn full_ring_cold_call_facing_three_bet_context() -> BotDecisionContext {
         let stacks = [Chips::from_units(100); 8];
         let mut hand = mtholdem::holdem::HoldemHand::new(
@@ -1515,9 +1560,33 @@ mod tests {
     }
 
     #[test]
+    fn balanced_bot_defends_big_blind_suited_connectors_full_ring() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_big_blind_facing_open_context().with_hole_cards(Some([
+            Card::new(Rank::Ten, mtholdem::Suit::Spades),
+            Card::new(Rank::Nine, mtholdem::Suit::Spades),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Call);
+    }
+
+    #[test]
     fn balanced_bot_still_folds_big_blind_trash_against_open() {
         let bot = HeuristicBot::from_preset(BotPreset::Balanced);
         let context = six_max_big_blind_facing_open_context().with_hole_cards(Some([
+            Card::new(Rank::Seven, mtholdem::Suit::Clubs),
+            Card::new(Rank::Two, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Fold);
+    }
+
+    #[test]
+    fn balanced_bot_still_folds_trash_big_blind_full_ring() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_big_blind_facing_open_context().with_hole_cards(Some([
             Card::new(Rank::Seven, mtholdem::Suit::Clubs),
             Card::new(Rank::Two, mtholdem::Suit::Diamonds),
         ]));
