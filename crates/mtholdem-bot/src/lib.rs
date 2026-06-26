@@ -1097,6 +1097,9 @@ fn preflop_score(cards: [Card; 2]) -> f32 {
     if high == 14 {
         score += 0.12;
     }
+    if high == 14 && low <= 5 && !suited {
+        score -= 0.05;
+    }
     if broadway(high) && broadway(low) {
         score += 0.16;
     }
@@ -1474,6 +1477,18 @@ mod tests {
         let context = six_max_unopened_context(3, &[]).with_hole_cards(Some([
             Card::new(Rank::Seven, mtholdem::Suit::Clubs),
             Card::new(Rank::Two, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Fold);
+    }
+
+    #[test]
+    fn balanced_bot_folds_weak_offsuit_ace_first_in_from_six_max_early_position() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = six_max_unopened_context(3, &[]).with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+            Card::new(Rank::Three, mtholdem::Suit::Spades),
         ]));
         let mut rng = StdRng::seed_from_u64(1);
 
