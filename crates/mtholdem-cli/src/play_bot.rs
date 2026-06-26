@@ -72,6 +72,11 @@ struct SeatStats {
     fold_to_open: u64,
     blind_defense_opportunities: u64,
     blind_defense: u64,
+    postflop_actions: u64,
+    postflop_bet_raise: u64,
+    postflop_call: u64,
+    postflop_fold: u64,
+    postflop_check: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -130,10 +135,23 @@ impl SessionStats {
         context: &BotDecisionContext,
         action: BetAction,
     ) {
-        if !self.enabled || street != Street::Preflop || actor.index() >= self.seats.len() {
+        if !self.enabled || actor.index() >= self.seats.len() {
             return;
         }
 
+        if street == Street::Preflop {
+            self.record_preflop_action(actor, context, action);
+        } else {
+            self.record_postflop_action(actor, action);
+        }
+    }
+
+    fn record_preflop_action(
+        &mut self,
+        actor: Seat,
+        context: &BotDecisionContext,
+        action: BetAction,
+    ) {
         let actor_index = actor.index();
         let is_call = matches!(action, BetAction::Call);
         let is_raise = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
@@ -198,6 +216,17 @@ impl SessionStats {
         }
     }
 
+    fn record_postflop_action(&mut self, actor: Seat, action: BetAction) {
+        let stats = &mut self.seats[actor.index()];
+        stats.postflop_actions += 1;
+        match action {
+            BetAction::RaiseTo(_) | BetAction::AllIn => stats.postflop_bet_raise += 1,
+            BetAction::Call => stats.postflop_call += 1,
+            BetAction::Fold => stats.postflop_fold += 1,
+            BetAction::Check => stats.postflop_check += 1,
+        }
+    }
+
     fn write_summary(&self, output: &mut impl Write) -> mtholdem::Result<()> {
         if !self.enabled {
             return Ok(());
@@ -217,6 +246,14 @@ impl SessionStats {
         for (index, stats) in self.seats.iter().enumerate() {
             write_stats_row(output, &format!("seat{index}"), stats)?;
         }
+        writeln!(output, "postflop action stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "seat actions bet/raise call fold check")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write_postflop_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_postflop_stats_row(output, &format!("seat{index}"), stats)?;
+        }
         Ok(())
     }
 }
@@ -232,6 +269,11 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.fold_to_open += stats.fold_to_open;
     total.blind_defense_opportunities += stats.blind_defense_opportunities;
     total.blind_defense += stats.blind_defense;
+    total.postflop_actions += stats.postflop_actions;
+    total.postflop_bet_raise += stats.postflop_bet_raise;
+    total.postflop_call += stats.postflop_call;
+    total.postflop_fold += stats.postflop_fold;
+    total.postflop_check += stats.postflop_check;
 }
 
 fn write_stats_row(
@@ -249,6 +291,23 @@ fn write_stats_row(
         stats.three_bet,
         format_rate(stats.fold_to_open, stats.fold_to_open_opportunities),
         format_rate(stats.blind_defense, stats.blind_defense_opportunities),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn write_postflop_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{label} {} {} {} {} {}",
+        stats.postflop_actions,
+        format_rate(stats.postflop_bet_raise, stats.postflop_actions),
+        format_rate(stats.postflop_call, stats.postflop_actions),
+        format_rate(stats.postflop_fold, stats.postflop_actions),
+        format_rate(stats.postflop_check, stats.postflop_actions),
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
@@ -280,8 +339,11 @@ impl TableState {
     }
 
     fn can_continue(&self) -> bool {
-        self.stacks.iter().filter(|stack| !stack.is_zero()).count() >= 2
-            && self.maximum_stack() >= Chips::from_units(2)
+        self.active_player_count() >= 2 && self.maximum_stack() >= Chips::from_units(2)
+    }
+
+    fn active_player_count(&self) -> usize {
+        self.stacks.iter().filter(|stack| !stack.is_zero()).count()
     }
 
     fn maximum_stack(&self) -> Chips {
@@ -320,6 +382,8 @@ struct InProcessHand {
     queue: VecDeque<QueuedEffect>,
     finished: Vec<FinishedHand>,
     printed_board_len: usize,
+    table_seat_count: usize,
+    active_player_count: usize,
     bot: HeuristicBot,
     bot_rng: StdRng,
     watch_bot: Option<Seat>,
@@ -487,7 +551,7 @@ fn print_play_bot_help() {
     println!("human seats: 0, 1, ... or seat0, seat1, ...");
     println!("human actions: fold, check, call, bet N, raise N, quit");
     println!("backends: peer, rules-only");
-    println!("--stats prints preflop VPIP/PFR/RFI/3bet/fold-to-open/blind-defense rates");
+    println!("--stats prints preflop rates and postflop action frequencies");
     println!(
         "        in bots-only mode, --stats suppresses per-hand logs unless --watch-bot is set"
     );
@@ -640,9 +704,7 @@ fn run_peer_hand(
     )
     .economics(economics)
     .build()?;
-    let active_seats = (0..options.players)
-        .map(|index| Seat::new(index).expect("player index was range-checked"))
-        .collect::<Vec<_>>();
+    let active_seats = active_seats_in_deal_order(table.button, &table.stacks);
     let deal_plan = DealPlan::new(options.players, table.button, &active_seats)?;
     let sessions = identities
         .iter()
@@ -664,6 +726,8 @@ fn run_peer_hand(
         queue: VecDeque::new(),
         finished: Vec::new(),
         printed_board_len: 0,
+        table_seat_count: options.players,
+        active_player_count: table.active_player_count(),
         bot: HeuristicBot::from_preset(options.preset),
         bot_rng: StdRng::seed_from_u64(options.seed),
         watch_bot: options.watch_bot,
@@ -710,6 +774,7 @@ fn run_rules_only_hand(
                 let action_context = hand.action_context()?;
                 let context =
                     BotDecisionContext::new(options.players, actor, street, legal_actions)
+                        .with_dealt_player_count(table.active_player_count())
                         .with_hole_cards(hole_cards[actor.index()])
                         .with_board(hand.board().to_vec())
                         .with_action_context(action_context);
@@ -919,7 +984,8 @@ impl InProcessHand {
             } => {
                 let street = betting_street(self.sessions[sender_index].status().phase());
                 let context =
-                    BotDecisionContext::new(self.sessions.len(), actor, street, legal_actions)
+                    BotDecisionContext::new(self.table_seat_count, actor, street, legal_actions)
+                        .with_dealt_player_count(self.active_player_count)
                         .with_hole_cards(self.sessions[sender_index].local_hole_cards())
                         .with_board(board_cards(&self.sessions[sender_index]))
                         .with_action_context(action_context);
@@ -1592,6 +1658,15 @@ mod tests {
     }
 
     #[test]
+    fn table_active_player_count_excludes_busted_seats() {
+        let mut table = TableState::new(4);
+        table.stacks[1] = Chips::ZERO;
+
+        assert_eq!(table.active_player_count(), 3);
+        assert!(table.can_continue());
+    }
+
+    #[test]
     fn play_bot_runs_bounded_human_sessions() {
         let script = "call\ncheck\n".repeat(50);
         let mut input = script.as_bytes();
@@ -1800,6 +1875,8 @@ mod tests {
         let output = String::from_utf8(output).expect("utf8");
         assert!(output.contains("bot action stats:"));
         assert!(output.contains("vpip pfr rfi 3bet fold-to-open blind-defense"));
+        assert!(output.contains("postflop action stats:"));
+        assert!(output.contains("seat actions bet/raise call fold check"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
         assert!(!output.contains("starting stacks:"));

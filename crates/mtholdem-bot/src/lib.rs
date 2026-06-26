@@ -99,8 +99,10 @@ impl BotPreset {
 /// Public context available to a host-side bot when choosing one action.
 #[derive(Clone, Debug)]
 pub struct BotDecisionContext {
-    /// Number of dealt players in the current hand.
+    /// Number of seats at the table.
     pub player_count: usize,
+    /// Number of seats dealt into the current hand, if known.
+    pub dealt_player_count: Option<usize>,
     /// Acting seat.
     pub actor: Seat,
     /// Dealer button seat, if the host exposes it.
@@ -144,6 +146,7 @@ impl BotDecisionContext {
     ) -> Self {
         Self {
             player_count,
+            dealt_player_count: None,
             actor,
             button: None,
             street,
@@ -160,6 +163,13 @@ impl BotDecisionContext {
             current_bet: None,
             street_raise_count: None,
         }
+    }
+
+    /// Adds the number of seats dealt into the current hand.
+    #[must_use]
+    pub const fn with_dealt_player_count(mut self, dealt_player_count: usize) -> Self {
+        self.dealt_player_count = Some(dealt_player_count);
+        self
     }
 
     /// Adds known hole cards.
@@ -380,7 +390,7 @@ impl HeuristicBot {
         let noise = rng.gen_range(-0.5..0.5) * self.profile.randomness;
         let multiway_penalty = context.live_opponents.map_or_else(
             || {
-                let opponents = context.player_count.saturating_sub(1);
+                let opponents = dealt_player_count(context).saturating_sub(1);
                 scaled_count_penalty(opponents, 0.025)
             },
             |opponents| scaled_count_penalty(opponents, 0.030),
@@ -405,7 +415,7 @@ impl HeuristicBot {
         let score = context.hole_cards.map(preflop_score)?;
         let spot = preflop_spot(context)?;
         let position = position_openness(context);
-        let short_handed = short_handed_openness(context.player_count);
+        let short_handed = short_handed_openness(dealt_player_count(context));
         match spot {
             PreflopSpot::FirstIn => {
                 if score >= open_threshold(self.profile, position, short_handed) {
@@ -509,7 +519,7 @@ fn defend_threshold(profile: BotProfile, context: &BotDecisionContext, short_han
         .is_some_and(|contributed| contributed > Chips::ZERO);
     let blind_discount = if posted_blind { 0.06 } else { 0.0 };
     let price_discount = call_cost_ratio(context).min(0.22) * 0.22;
-    let full_ring_penalty = scaled_count_penalty(context.player_count, 0.006).min(0.04);
+    let full_ring_penalty = scaled_count_penalty(dealt_player_count(context), 0.006).min(0.04);
     let multiway_penalty = context.matched_bet_opponents.map_or(0.0, |matched| {
         scaled_count_penalty(matched, 0.020).min(0.08)
     });
@@ -556,6 +566,13 @@ fn position_openness(context: &BotDecisionContext) -> f32 {
     let distance_to_button = (button.index() + seats - context.actor.index()) % seats;
     let denominator = seats.saturating_sub(1).max(1);
     1.0 - capped_ratio(distance_to_button as u64, denominator as u64)
+}
+
+fn dealt_player_count(context: &BotDecisionContext) -> usize {
+    context
+        .dealt_player_count
+        .unwrap_or(context.player_count)
+        .max(2)
 }
 
 fn short_handed_openness(player_count: usize) -> f32 {
@@ -819,7 +836,7 @@ fn monte_carlo_equity(
     }
     let opponent_count = context
         .live_opponents
-        .unwrap_or_else(|| context.player_count.saturating_sub(1))
+        .unwrap_or_else(|| dealt_player_count(context).saturating_sub(1))
         .min(7);
     if opponent_count == 0 {
         return Some(1.0);
@@ -1044,6 +1061,10 @@ mod tests {
     }
 
     fn heads_up_button_context() -> BotDecisionContext {
+        heads_up_button_context_at_table(2)
+    }
+
+    fn heads_up_button_context_at_table(table_seat_count: usize) -> BotDecisionContext {
         let stacks = [Chips::from_units(100), Chips::from_units(100)];
         let hand = mtholdem::holdem::HoldemHand::new(
             &stacks,
@@ -1056,11 +1077,12 @@ mod tests {
         let actor = Seat::new(0).expect("button");
         assert_eq!(hand.next_to_act(), Some(actor));
         BotDecisionContext::new(
-            2,
+            table_seat_count,
             actor,
             Street::Preflop,
             hand.legal_actions().expect("legal"),
         )
+        .with_dealt_player_count(2)
         .with_action_context(hand.action_context().expect("context"))
     }
 
@@ -1311,6 +1333,21 @@ mod tests {
     fn balanced_bot_opens_more_heads_up_buttons() {
         let bot = HeuristicBot::from_preset(BotPreset::Balanced);
         let context = heads_up_button_context().with_hole_cards(Some([
+            Card::new(Rank::Ten, mtholdem::Suit::Hearts),
+            Card::new(Rank::Four, mtholdem::Suit::Hearts),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
+    }
+
+    #[test]
+    fn balanced_bot_uses_dealt_count_after_seats_bust() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = heads_up_button_context_at_table(6).with_hole_cards(Some([
             Card::new(Rank::Ten, mtholdem::Suit::Hearts),
             Card::new(Rank::Four, mtholdem::Suit::Hearts),
         ]));
