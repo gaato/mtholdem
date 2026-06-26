@@ -190,6 +190,10 @@ solver or self-play system; see
 Preset tuning should be driven by aggregate bot telemetry such as VPIP, PFR,
 RFI, 3-bet, steal, blind-defense, street-bet, showdown, and seat win-rate
 metrics rather than by individual short transcripts.
+Those metrics should be checked against human-oriented no-limit Hold'em
+baselines such as position-aware tight-aggressive opening, small unopened
+preflop raises, pot-odds-aware calls, and lower multiway continuation-bet
+frequency.
 
 ## Host table events and future runner
 

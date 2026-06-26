@@ -20,6 +20,14 @@ re-solving, depth-limited search, and learned or computed value functions. They
 are important reference points, but they are far beyond the complexity needed
 for a responsive local opponent in this workspace.
 
+Human-oriented no-limit Hold'em strategy material points to the same practical
+baseline from another direction: start with position-aware tight-aggressive
+play, widen opening ranges toward the button, prefer raising to passive calling
+when entering first, use pot odds and equity for continue decisions, reduce
+continuation-bet frequency in multiway pots, and adjust value/bluff frequencies
+to opponent tendencies. These are not solver guarantees, but they are the right
+target for a local practice opponent that should feel recognizable to humans.
+
 The practical gap in the current bot is narrower: postflop strength is still a
 static made-hand category plus small draw heuristics. That makes one-pair and
 draw-heavy spots too coarse. A pair on a paired board, top pair with strong
@@ -54,6 +62,9 @@ The bot architecture should remain:
      sizing stages.
    - Bet sizing should account for pot, stack depth, blind size, limpers, and
      multiway pressure.
+   - Default unopened preflop sizes should be in the human-standard small-open
+     range, roughly 2 to 2.5 big blinds at ordinary stack depths, with limper
+     isolation and short-stack exceptions handled explicitly.
 
 The first implementation may expose a synchronous decision API. A simulation
 bot may spend a bounded number of trials before returning a `BotDecision`.
@@ -73,6 +84,13 @@ inspect at least VPIP, PFR, RFI, 3-bet rate, button steal rate, blind defense,
 street bet rates, showdown rate, and win rate by seat. Preset names are labels
 for intended tendencies; they should be validated against these observable
 statistics instead of assumed from their names.
+
+For the initial `Balanced` target, use human baseline ranges as guardrails
+rather than exact promises. At an eight-player, roughly 50 big blind table, a
+reasonable first target is about 18-26% VPIP, 12-20% PFR, 30-45% button steal,
+and 4-8% 3-bet, with wider ranges as the table becomes short-handed. If
+telemetry shows PFR near zero, no blind defense, or repeated big-blind walks,
+fix the preflop model before further postflop tuning.
 
 ## Alternatives Considered
 
@@ -121,6 +139,10 @@ statistics instead of assumed from their names.
   preset tuning. A likely shape is a bot-only simulation summary that reports
   VPIP, PFR, RFI, 3-bet, steal, blind-defense, street-bet, showdown, and
   seat-level win-rate metrics for each preset.
+- Bot calibration should include human-strategy sanity tests: early-position
+  ranges should be tighter than button ranges, unopened late-position steal
+  attempts should exist, calling should respect pot odds and multiway pressure,
+  and continuation betting should vary by board texture and opponent count.
 
 ## Implementation References
 - eval7: https://github.com/julianandrews/pyeval7
@@ -140,6 +162,14 @@ statistics instead of assumed from their names.
 - OpenSpiel: https://github.com/google-deepmind/open_spiel
   - Useful reference for research-grade imperfect-information game APIs and
     algorithms, not as a direct dependency target.
+- General Texas Hold'em strategy: https://en.wikipedia.org/wiki/Texas_hold_%27em#Strategy
+  - Useful reference for the tight-aggressive and position-aware human baseline.
+- General poker strategy: https://en.wikipedia.org/wiki/Poker_strategy
+  - Useful reference for pot odds, gap/sandwich concepts, aggressive/passive
+    play, range reading, and opponent profiling.
+- Poker position: https://en.wikipedia.org/wiki/Position_%28poker%29
+  - Useful reference for why late position widens playable ranges and why
+    blinds are structurally difficult.
 
 These projects are implementation references, not source-code sources. Before
 copying code, run a separate license and provenance review. The initial
