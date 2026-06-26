@@ -70,6 +70,8 @@ struct SeatStats {
     three_bet: u64,
     fold_to_open_opportunities: u64,
     fold_to_open: u64,
+    cold_continue_opportunities: u64,
+    cold_continue: u64,
     blind_defense_opportunities: u64,
     blind_defense: u64,
     postflop_actions: u64,
@@ -194,6 +196,14 @@ impl SessionStats {
             let posted_blind = context
                 .actor_street_contributed
                 .is_some_and(|contributed| contributed > Chips::ZERO);
+            if facing_open && !posted_blind {
+                self.update_actor_stats(actor_index, |stats| {
+                    stats.cold_continue_opportunities += 1;
+                });
+                if is_call || is_raise {
+                    self.update_actor_stats(actor_index, |stats| stats.cold_continue += 1);
+                }
+            }
             if facing_open && posted_blind {
                 self.update_actor_stats(actor_index, |stats| {
                     stats.blind_defense_opportunities += 1;
@@ -265,7 +275,7 @@ impl SessionStats {
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         writeln!(
             output,
-            "seat hands vpip pfr rfi 3bet fold-to-open blind-defense"
+            "seat hands vpip pfr rfi 3bet fold-to-open cold-continue blind-defense"
         )
         .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         let mut total = SeatStats::default();
@@ -280,7 +290,7 @@ impl SessionStats {
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         writeln!(
             output,
-            "players hands vpip pfr rfi 3bet fold-to-open blind-defense"
+            "players hands vpip pfr rfi 3bet fold-to-open cold-continue blind-defense"
         )
         .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
@@ -318,6 +328,8 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.three_bet += stats.three_bet;
     total.fold_to_open_opportunities += stats.fold_to_open_opportunities;
     total.fold_to_open += stats.fold_to_open;
+    total.cold_continue_opportunities += stats.cold_continue_opportunities;
+    total.cold_continue += stats.cold_continue;
     total.blind_defense_opportunities += stats.blind_defense_opportunities;
     total.blind_defense += stats.blind_defense;
     total.postflop_actions += stats.postflop_actions;
@@ -335,13 +347,14 @@ fn write_stats_row(
 ) -> mtholdem::Result<()> {
     writeln!(
         output,
-        "{label} {} {} {} {} {} {} {}",
+        "{label} {} {} {} {} {} {} {} {}",
         stats.hands,
         format_rate(stats.vpip, stats.hands),
         format_rate(stats.pfr, stats.hands),
         format_rate(stats.rfi, stats.rfi_opportunities),
         stats.three_bet,
         format_rate(stats.fold_to_open, stats.fold_to_open_opportunities),
+        format_rate(stats.cold_continue, stats.cold_continue_opportunities),
         format_rate(stats.blind_defense, stats.blind_defense_opportunities),
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
@@ -1927,7 +1940,7 @@ mod tests {
         assert_eq!(outcome.completed_hands, 2);
         let output = String::from_utf8(output).expect("utf8");
         assert!(output.contains("bot action stats:"));
-        assert!(output.contains("vpip pfr rfi 3bet fold-to-open blind-defense"));
+        assert!(output.contains("vpip pfr rfi 3bet fold-to-open cold-continue blind-defense"));
         assert!(output.contains("dealt-player action stats:"));
         assert!(output.contains("p3 6 "));
         assert!(output.contains("postflop action stats:"));
