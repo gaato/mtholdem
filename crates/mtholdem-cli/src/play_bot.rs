@@ -63,6 +63,7 @@ struct SessionOutcome {
 #[derive(Clone, Debug, Default)]
 struct SeatStats {
     hands: u64,
+    net_chips: i128,
     vpip: u64,
     pfr: u64,
     rfi_opportunities: u64,
@@ -91,6 +92,7 @@ struct SeatStats {
 struct HandStats {
     vpip: Vec<bool>,
     pfr: Vec<bool>,
+    starting_stacks: Vec<Chips>,
     voluntary_opened: bool,
     open_raiser: Option<Seat>,
     last_preflop_raiser: Option<Seat>,
@@ -103,6 +105,7 @@ impl HandStats {
         Self {
             vpip: vec![false; players],
             pfr: vec![false; players],
+            starting_stacks: vec![Chips::ZERO; players],
             voluntary_opened: false,
             open_raiser: None,
             last_preflop_raiser: None,
@@ -133,6 +136,8 @@ impl SessionStats {
     fn start_hand(&mut self, stacks: &[Chips]) {
         let dealt_player_count = stacks.iter().filter(|stack| !stack.is_zero()).count();
         self.current = HandStats::new(self.seats.len(), dealt_player_count);
+        self.current.starting_stacks.clear();
+        self.current.starting_stacks.extend_from_slice(stacks);
         if !self.enabled {
             return;
         }
@@ -143,6 +148,32 @@ impl SessionStats {
         }
         if let Some(stats) = self.by_dealt_player_count.get_mut(dealt_player_count) {
             stats.hands += u64::try_from(dealt_player_count).expect("player count fits u64");
+        }
+    }
+
+    fn record_hand_result(&mut self, final_stacks: &[Chips]) {
+        if !self.enabled {
+            return;
+        }
+        for (index, (start, end)) in self
+            .current
+            .starting_stacks
+            .iter()
+            .copied()
+            .zip(final_stacks.iter().copied())
+            .enumerate()
+        {
+            if start.is_zero() {
+                continue;
+            }
+            let delta = chip_delta(start, end);
+            self.seats[index].net_chips += delta;
+            if let Some(stats) = self
+                .by_dealt_player_count
+                .get_mut(self.current.dealt_player_count)
+            {
+                stats.net_chips += delta;
+            }
         }
     }
 
@@ -338,6 +369,23 @@ impl SessionStats {
                 write_stats_row(output, &format!("p{count}"), stats)?;
             }
         }
+        writeln!(output, "chip result stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "seat hands net avg")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        write_chip_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_chip_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        writeln!(output, "chip result by dealt players:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "players hands net avg")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_chip_stats_row(output, &format!("p{count}"), stats)?;
+            }
+        }
         writeln!(output, "postflop action stats:")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         writeln!(output, "seat actions bet raise call fold check")
@@ -395,6 +443,7 @@ impl SessionStats {
 
 fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.hands += stats.hands;
+    total.net_chips += stats.net_chips;
     total.vpip += stats.vpip;
     total.pfr += stats.pfr;
     total.rfi_opportunities += stats.rfi_opportunities;
@@ -417,6 +466,10 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.flop_cbet += stats.flop_cbet;
     total.turn_barrel_opportunities += stats.turn_barrel_opportunities;
     total.turn_barrel += stats.turn_barrel;
+}
+
+fn chip_delta(start: Chips, end: Chips) -> i128 {
+    i128::from(end.units()) - i128::from(start.units())
 }
 
 fn write_stats_row(
@@ -457,6 +510,21 @@ fn write_postflop_stats_row(
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
 
+fn write_chip_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{label} {} {} {}",
+        stats.hands,
+        stats.net_chips,
+        format_signed_rate(stats.net_chips, stats.hands),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
 fn write_cbet_stats_row(
     output: &mut impl Write,
     label: &str,
@@ -493,6 +561,17 @@ fn format_rate(numerator: u64, denominator: u64) -> String {
         percent / 10,
         percent % 10
     )
+}
+
+fn format_signed_rate(numerator: i128, denominator: u64) -> String {
+    if denominator == 0 {
+        return "-".to_owned();
+    }
+    let denominator = i128::from(denominator);
+    let scaled = numerator * 10 / denominator;
+    let sign = if scaled < 0 { "-" } else { "" };
+    let absolute = scaled.abs();
+    format!("{sign}{}.{:01}", absolute / 10, absolute % 10)
 }
 
 #[derive(Clone, Debug)]
@@ -768,6 +847,7 @@ fn run_session(
         match run_hand(options, hand_number, &table, &mut stats, input, output)? {
             HandOutcome::Finished(result) => {
                 outcome.completed_hands += 1;
+                stats.record_hand_result(result.finished.final_stacks());
                 if log_hands {
                     write_finished_hand_summary(options, &result, output)?;
                 }
@@ -1377,7 +1457,7 @@ fn write_bot_watch(
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
     writeln!(
         output,
-        "assessment: strength={} equity={} draw={} pressure={} score={} category={}",
+        "assessment(generic): strength={} equity={} draw={} pressure={} score={} category={}",
         format_float(decision.assessment.strength),
         format_optional_float(decision.assessment.equity),
         format_float(decision.assessment.draw_potential),
@@ -2051,6 +2131,10 @@ mod tests {
         assert!(output.contains("vpip pfr rfi 3bet fold-to-open cold-continue blind-defense"));
         assert!(output.contains("dealt-player action stats:"));
         assert!(output.contains("p3 6 "));
+        assert!(output.contains("chip result stats:"));
+        assert!(output.contains("seat hands net avg"));
+        assert!(output.contains("all 6 0 0.0"));
+        assert!(output.contains("chip result by dealt players:"));
         assert!(output.contains("postflop action stats:"));
         assert!(output.contains("seat actions bet raise call fold check"));
         assert!(output.contains("postflop by dealt players:"));
@@ -2086,7 +2170,7 @@ mod tests {
         let output = String::from_utf8(output).expect("utf8");
         assert!(output.contains("bot-watch: seat 0"));
         assert!(output.contains("hand:"));
-        assert!(output.contains("assessment:"));
+        assert!(output.contains("assessment(generic):"));
         assert!(output.contains("decision:"));
         assert!(output.contains("preflop: seat 0"));
         assert!(!output.contains("action=preflop:"));
