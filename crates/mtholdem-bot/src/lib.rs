@@ -677,6 +677,13 @@ fn should_fold(
     context: &BotDecisionContext,
     assessment: HandAssessment,
 ) -> bool {
+    let strong_draw_continue = context.street != Street::River
+        && call_cost_ratio(context) <= 0.35
+        && assessment.draw_potential >= 0.12
+        && assessment.equity.is_some_and(|equity| equity >= 0.38);
+    if strong_draw_continue {
+        return false;
+    }
     let threshold = 0.38 - (profile.call_bias * 0.14) + call_cost_ratio(context) * 0.18;
     assessment.score < threshold
 }
@@ -693,14 +700,27 @@ fn should_raise(
     let depth_penalty = f32::from(raise_depth) * 0.10;
     let call_ratio_penalty = call_cost_ratio(context) * 0.20;
     let threshold = 0.82 + depth_penalty + call_ratio_penalty - profile.aggression * 0.18;
+    let facing_first_bet = context.legal_actions.to_call() > Chips::ZERO && raise_depth <= 1;
+    let call_ratio = call_cost_ratio(context);
     let monster_value = assessment
         .category
         .is_some_and(|category| category >= HandCategory::ThreeOfAKind)
         && assessment.strength >= 0.78
         && assessment.score >= 0.66;
+    let high_equity_value = facing_first_bet
+        && call_ratio <= 0.24
+        && assessment.equity.is_some_and(|equity| equity >= 0.76)
+        && assessment.score >= 0.62;
+    let strong_draw_pressure = facing_first_bet
+        && call_ratio <= 0.33
+        && assessment.draw_potential >= 0.12
+        && assessment.equity.is_some_and(|equity| equity >= 0.38)
+        && assessment.score + assessment.draw_potential + profile.aggression * 0.20 >= 0.58;
     assessment.score >= threshold
         && (assessment.strength >= 0.72 || profile.bluff_rate > 0.18 && assessment.score >= 0.76)
         || monster_value
+        || high_equity_value
+        || strong_draw_pressure
 }
 
 fn near_all_in(context: &BotDecisionContext, assessment: HandAssessment) -> bool {
@@ -1885,6 +1905,41 @@ mod tests {
             Card::new(Rank::Five, mtholdem::Suit::Diamonds),
             Card::new(Rank::Ace, mtholdem::Suit::Clubs),
             Card::new(Rank::Ace, mtholdem::Suit::Spades),
+        ]);
+        let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
+
+        assert!(
+            matches!(decision.action, BetAction::RaiseTo(_)),
+            "{decision:?}"
+        );
+    }
+
+    #[test]
+    fn balanced_bot_raises_strong_draw_against_first_flop_bet() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = heads_up_facing_flop_bet_context(
+            &[
+                (0, BetAction::RaiseTo(Chips::from_units(5))),
+                (1, BetAction::Call),
+            ],
+            [
+                Card::new(Rank::Queen, mtholdem::Suit::Hearts),
+                Card::new(Rank::Jack, mtholdem::Suit::Hearts),
+                Card::new(Rank::Two, mtholdem::Suit::Clubs),
+            ],
+            1,
+            7,
+            0,
+        )
+        .with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Hearts),
+            Card::new(Rank::King, mtholdem::Suit::Clubs),
+        ]))
+        .with_board([
+            Card::new(Rank::Queen, mtholdem::Suit::Hearts),
+            Card::new(Rank::Jack, mtholdem::Suit::Hearts),
+            Card::new(Rank::Two, mtholdem::Suit::Clubs),
         ]);
         let mut rng = StdRng::seed_from_u64(1);
         let decision = bot.decide(&context, &mut rng);
