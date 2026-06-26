@@ -109,6 +109,73 @@ impl LegalActions {
     }
 }
 
+/// Public betting context for the seat whose turn it is.
+///
+/// This contains only table facts derivable from the public ledger. Hosts can pass it
+/// to UIs or bots without exposing hole cards, deck order, reveal shares, or local
+/// peer secrets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActionContext {
+    pot: Chips,
+    actor_stack: Chips,
+    actor_street_contributed: Chips,
+    effective_stack: Option<Chips>,
+    live_opponents: usize,
+    matched_bet_opponents: usize,
+    big_blind: Chips,
+    current_bet: Chips,
+}
+
+impl ActionContext {
+    /// Current pot size before the actor chooses.
+    #[must_use]
+    pub const fn pot(self) -> Chips {
+        self.pot
+    }
+
+    /// Actor's remaining stack before choosing.
+    #[must_use]
+    pub const fn actor_stack(self) -> Chips {
+        self.actor_stack
+    }
+
+    /// Actor's contribution on the current betting street.
+    #[must_use]
+    pub const fn actor_street_contributed(self) -> Chips {
+        self.actor_street_contributed
+    }
+
+    /// Smallest remaining stack among live playing opponents, if any can still act.
+    #[must_use]
+    pub const fn effective_stack(self) -> Option<Chips> {
+        self.effective_stack
+    }
+
+    /// Number of opponents who remain eligible to contest the pot.
+    #[must_use]
+    pub const fn live_opponents(self) -> usize {
+        self.live_opponents
+    }
+
+    /// Number of opponents whose current street contribution has matched the bet.
+    #[must_use]
+    pub const fn matched_bet_opponents(self) -> usize {
+        self.matched_bet_opponents
+    }
+
+    /// Configured big blind, also the minimum opening bet.
+    #[must_use]
+    pub const fn big_blind(self) -> Chips {
+        self.big_blind
+    }
+
+    /// Current highest required street contribution.
+    #[must_use]
+    pub const fn current_bet(self) -> Chips {
+        self.current_bet
+    }
+}
+
 /// Per-seat chip accounting for a hand.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandLedger {
@@ -453,6 +520,51 @@ impl BettingRound {
             minimum_raise_to,
             maximum_raise_to,
             raise_reopened: self.raise_reopened[seat.index()],
+        })
+    }
+
+    /// Returns public betting context for the seat whose turn it is.
+    pub fn action_context(&self) -> Result<ActionContext> {
+        let actor = self
+            .next_to_act
+            .ok_or_else(|| rules("the betting round is complete"))?;
+        let player = self.ledger.seat(actor)?;
+        let mut live_opponents = 0;
+        let mut matched_bet_opponents = 0;
+        let mut effective_stack = None;
+
+        for index in 0..self.ledger.seat_count() {
+            let seat = Seat::new(index).expect("ledger seat count fits seats");
+            if seat == actor {
+                continue;
+            }
+            let opponent = self.ledger.seat(seat)?;
+            if matches!(
+                opponent.status,
+                HandSeatStatus::Playing | HandSeatStatus::AllIn
+            ) {
+                live_opponents += 1;
+                if opponent.street_contributed >= self.current_bet {
+                    matched_bet_opponents += 1;
+                }
+            }
+            if opponent.status == HandSeatStatus::Playing {
+                effective_stack = Some(
+                    effective_stack
+                        .map_or(opponent.stack, |current: Chips| current.min(opponent.stack)),
+                );
+            }
+        }
+
+        Ok(ActionContext {
+            pot: self.ledger.pot()?,
+            actor_stack: player.stack,
+            actor_street_contributed: player.street_contributed,
+            effective_stack,
+            live_opponents,
+            matched_bet_opponents,
+            big_blind: self.ledger.big_blind,
+            current_bet: self.current_bet,
         })
     }
 
@@ -984,6 +1096,31 @@ mod tests {
         let reopened = round.legal_actions().expect("reopened actions");
         assert!(reopened.raise_reopened());
         assert_eq!(reopened.minimum_raise_to(), Some(chips(20)));
+    }
+
+    #[test]
+    fn action_context_reports_only_public_betting_facts() {
+        let mut ledger = HandLedger::new(&[chips(100); 5], seat(0), chips(2)).expect("ledger");
+        ledger.post_forced_bet(seat(1), chips(1)).expect("sb");
+        ledger.post_forced_bet(seat(2), chips(2)).expect("bb");
+        let mut round =
+            BettingRound::new(ledger, Street::Preflop, seat(3), chips(2)).expect("round");
+
+        round.apply(seat(3), BetAction::Call).expect("seat3 call");
+        round.apply(seat(4), BetAction::Call).expect("seat4 call");
+        round.apply(seat(0), BetAction::Call).expect("button call");
+        round.apply(seat(1), BetAction::Call).expect("sb call");
+
+        assert_eq!(round.next_to_act(), Some(seat(2)));
+        let context = round.action_context().expect("context");
+        assert_eq!(context.pot(), chips(10));
+        assert_eq!(context.actor_stack(), chips(98));
+        assert_eq!(context.actor_street_contributed(), chips(2));
+        assert_eq!(context.effective_stack(), Some(chips(98)));
+        assert_eq!(context.live_opponents(), 4);
+        assert_eq!(context.matched_bet_opponents(), 4);
+        assert_eq!(context.big_blind(), chips(2));
+        assert_eq!(context.current_bet(), chips(2));
     }
 
     #[test]

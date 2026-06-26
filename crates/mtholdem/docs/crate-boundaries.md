@@ -135,6 +135,9 @@ rejection, and host effects. Sockets, timers, databases, and UI differ per
 deployment. `mtholdem-peer` orchestrates `SignedPublicMessage`,
 `SignedPrivateReveal`, `HandCryptography`, checkpoint/recovery artifacts, and
 typed `HostEffect` values without owning transport.
+Its action-request effects carry both deterministic `LegalActions` and public
+betting context derived from the rules ledger, so hosts can present prompts or
+drive bots without recalculating backend-specific table state.
 
 This lets CLI, FFI, downstream WASM/npm packages, and Godot wrappers share the
 same Rust-owned peer state.
@@ -145,6 +148,9 @@ CLI, C ABI, downstream WASM packages, and Godot bindings use the same
 peer-session state, but allocator, buffer ownership, error reporting, and
 language binding constraints differ by target. `mtholdem-adapter` translates
 typed `mtholdem-peer` effects and actions into byte-oriented boundary values.
+For request-action effects, that boundary includes public pot/stack/opponent
+context alongside legal action limits; it does not include hidden cards, deck
+order, reveal shares, or bot policy state.
 
 `mtholdem-cli` and `mtholdem-ffi` own only the outside of that adapter boundary.
 The C ABI exposes opaque handles, ABI versions, and caller-visible buffer

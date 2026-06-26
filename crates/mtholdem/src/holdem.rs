@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 
 use crate::betting::{
-    BetAction, BettingRound, HandLedger, HandSeatStatus, LegalActions, PotDistribution, Street,
-    distribute_showdown, distribute_uncontested,
+    ActionContext, BetAction, BettingRound, HandLedger, HandSeatStatus, LegalActions,
+    PotDistribution, Street, distribute_showdown, distribute_uncontested,
 };
 use crate::card::{Card, HandValue, evaluate_best};
 use crate::types::{Chips, MAX_PLAYERS, MIN_PLAYERS, Seat};
@@ -243,6 +243,14 @@ impl HoldemHand {
             .as_ref()
             .ok_or_else(|| rules("the hand is not in a betting phase"))?
             .legal_actions()
+    }
+
+    /// Returns public betting context for the expected actor.
+    pub fn action_context(&self) -> Result<ActionContext> {
+        self.round
+            .as_ref()
+            .ok_or_else(|| rules("the hand is not in a betting phase"))?
+            .action_context()
     }
 
     /// Applies a betting action and automatically advances when the street closes.

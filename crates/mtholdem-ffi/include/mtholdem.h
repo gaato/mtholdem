@@ -82,6 +82,16 @@ typedef struct MthEffect {
     uint64_t maximum_raise_to_units;
     bool raise_reopened;
     bool can_check;
+    bool has_action_context;
+    uint64_t pot_units;
+    uint64_t actor_stack_units;
+    uint64_t actor_street_contributed_units;
+    bool has_effective_stack;
+    uint64_t effective_stack_units;
+    uint8_t live_opponents;
+    uint8_t matched_bet_opponents;
+    uint64_t big_blind_units;
+    uint64_t current_bet_units;
     bool has_transcript_anchor;
     uint64_t next_sequence;
     uint8_t transcript_digest[32];

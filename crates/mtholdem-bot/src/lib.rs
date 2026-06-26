@@ -7,7 +7,7 @@
 
 #![forbid(unsafe_code)]
 
-use mtholdem::betting::{BetAction, LegalActions, Street};
+use mtholdem::betting::{ActionContext, BetAction, LegalActions, Street};
 use mtholdem::{Card, Chips, HandCategory, Rank, Seat};
 use rand::Rng;
 
@@ -118,6 +118,12 @@ pub struct BotDecisionContext {
     pub effective_stack: Option<Chips>,
     /// Number of live opponents who can still contest the pot.
     pub live_opponents: Option<usize>,
+    /// Number of opponents whose current street contribution has matched the bet.
+    pub matched_bet_opponents: Option<usize>,
+    /// Configured big blind.
+    pub big_blind: Option<Chips>,
+    /// Current highest required street contribution.
+    pub current_bet: Option<Chips>,
     /// Number of raises already made on this street, if known.
     pub street_raise_count: Option<u8>,
 }
@@ -143,6 +149,9 @@ impl BotDecisionContext {
             actor_street_contributed: None,
             effective_stack: None,
             live_opponents: None,
+            matched_bet_opponents: None,
+            big_blind: None,
+            current_bet: None,
             street_raise_count: None,
         }
     }
@@ -193,6 +202,41 @@ impl BotDecisionContext {
     #[must_use]
     pub const fn with_live_opponents(mut self, live_opponents: usize) -> Self {
         self.live_opponents = Some(live_opponents);
+        self
+    }
+
+    /// Adds the number of opponents whose current contribution has matched the bet.
+    #[must_use]
+    pub const fn with_matched_bet_opponents(mut self, matched_bet_opponents: usize) -> Self {
+        self.matched_bet_opponents = Some(matched_bet_opponents);
+        self
+    }
+
+    /// Adds the configured big blind.
+    #[must_use]
+    pub const fn with_big_blind(mut self, big_blind: Chips) -> Self {
+        self.big_blind = Some(big_blind);
+        self
+    }
+
+    /// Adds the current highest required street contribution.
+    #[must_use]
+    pub const fn with_current_bet(mut self, current_bet: Chips) -> Self {
+        self.current_bet = Some(current_bet);
+        self
+    }
+
+    /// Adds all public action-context facts produced by the rules engine.
+    #[must_use]
+    pub fn with_action_context(mut self, action_context: ActionContext) -> Self {
+        self.pot = Some(action_context.pot());
+        self.actor_stack = Some(action_context.actor_stack());
+        self.actor_street_contributed = Some(action_context.actor_street_contributed());
+        self.effective_stack = action_context.effective_stack();
+        self.live_opponents = Some(action_context.live_opponents());
+        self.matched_bet_opponents = Some(action_context.matched_bet_opponents());
+        self.big_blind = Some(action_context.big_blind());
+        self.current_bet = Some(action_context.current_bet());
         self
     }
 
@@ -445,22 +489,36 @@ fn map_to_legal_action(
 fn sized_raise(context: &BotDecisionContext, sizing: BetSizing) -> Option<Chips> {
     let (minimum, maximum) = legal_raise_bounds(context.legal_actions)?;
     let target = match sizing {
-        BetSizing::PotFraction(fraction) => {
-            let pot = context.pot.map_or_else(
-                || {
-                    minimum
-                        .units()
-                        .saturating_add(default_raise_span(minimum, maximum))
-                },
-                Chips::units,
-            );
-            let desired = minimum.units().saturating_add(scale_units(pot, fraction));
-            Chips::from_units(desired)
-        }
+        BetSizing::PotFraction(fraction) => preflop_open_or_isolation_target(context)
+            .unwrap_or_else(|| {
+                let pot = context.pot.map_or_else(
+                    || {
+                        minimum
+                            .units()
+                            .saturating_add(default_raise_span(minimum, maximum))
+                    },
+                    Chips::units,
+                );
+                let desired = minimum.units().saturating_add(scale_units(pot, fraction));
+                Chips::from_units(desired)
+            }),
         BetSizing::AllIn => maximum,
         BetSizing::None => minimum,
     };
     Some(clamp_chips(target, minimum, maximum))
+}
+
+fn preflop_open_or_isolation_target(context: &BotDecisionContext) -> Option<Chips> {
+    if context.street != Street::Preflop || !context.legal_actions.can_check() {
+        return None;
+    }
+    let big_blind = context.big_blind?.units();
+    if big_blind == 0 {
+        return None;
+    }
+    let matched = context.matched_bet_opponents.unwrap_or(0) as u64;
+    let target_blinds = 3_u64.saturating_add(matched);
+    Some(Chips::from_units(big_blind.saturating_mul(target_blinds)))
 }
 
 fn legal_raise_bounds(legal: LegalActions) -> Option<(Chips, Chips)> {
@@ -706,6 +764,30 @@ mod tests {
         hand.legal_actions().expect("postflop legal")
     }
 
+    fn big_blind_after_limpers_context() -> BotDecisionContext {
+        let stacks = [Chips::from_units(100); 5];
+        let mut hand = mtholdem::holdem::HoldemHand::new(
+            &stacks,
+            Seat::new(0).expect("button"),
+            Chips::from_units(1),
+            Chips::from_units(2),
+            Chips::from_units(100),
+        )
+        .expect("hand");
+        for index in [3, 4, 0, 1] {
+            hand.apply_action(Seat::new(index).expect("seat"), BetAction::Call)
+                .expect("limp");
+        }
+        assert_eq!(hand.next_to_act(), Some(Seat::new(2).expect("bb")));
+        BotDecisionContext::new(
+            5,
+            Seat::new(2).expect("bb"),
+            Street::Preflop,
+            hand.legal_actions().expect("legal"),
+        )
+        .with_action_context(hand.action_context().expect("context"))
+    }
+
     #[test]
     fn presets_are_clamped_profiles() {
         for preset in [
@@ -784,5 +866,12 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         let action = bot.choose_action(&context, &mut rng);
         assert!(matches!(action, BetAction::RaiseTo(amount) if amount.units() > 2));
+    }
+
+    #[test]
+    fn preflop_sizing_isolates_over_limpers() {
+        let context = big_blind_after_limpers_context();
+        let target = sized_raise(&context, BetSizing::PotFraction(0.5)).expect("raise target");
+        assert_eq!(target, Chips::from_units(14));
     }
 }

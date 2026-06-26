@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use mental_card_core::crypto::{MentalKeyShare, RevealShare, RevealShareProof};
 use mental_card_core::error::{Result, protocol};
 use mental_card_core::identity::IdentitySecret;
-use mtholdem::betting::{BetAction, LegalActions, Street};
+use mtholdem::betting::{ActionContext, BetAction, LegalActions, Street};
 use mtholdem::checkpoint::{
     CertifiedCheckpoint, CheckpointState, CheckpointVote, HoleCardReceipts, OpenBoardCard,
 };
@@ -67,6 +67,8 @@ pub enum HostEffect {
         actor: Seat,
         /// Legal choices according to the deterministic rules engine.
         legal_actions: LegalActions,
+        /// Public table context for the actor's decision.
+        action_context: ActionContext,
     },
     /// Submit recovery evidence to an external mediator.
     SubmitRecovery(RecoveryBundle),
@@ -1014,9 +1016,11 @@ impl PeerSession {
             return Ok(false);
         }
         let legal_actions = holdem.legal_actions()?;
+        let action_context = holdem.action_context()?;
         self.effects.push_back(HostEffect::RequestAction {
             actor,
             legal_actions,
+            action_context,
         });
         self.requested_action = Some(actor);
         Ok(true)
@@ -1795,6 +1799,7 @@ mod tests {
                     HostEffect::RequestAction {
                         actor,
                         legal_actions,
+                        action_context: _,
                     } => {
                         assert_eq!(actor.index(), sender_index);
                         // A real host would ask a UI or bot. The harness answers

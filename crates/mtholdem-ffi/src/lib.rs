@@ -298,6 +298,26 @@ pub struct MthEffect {
     pub raise_reopened: bool,
     /// Whether checking is legal.
     pub can_check: bool,
+    /// Whether public action-context fields are meaningful.
+    pub has_action_context: bool,
+    /// Current pot size before the actor chooses.
+    pub pot_units: u64,
+    /// Actor's remaining stack before choosing.
+    pub actor_stack_units: u64,
+    /// Actor's contribution on the current street.
+    pub actor_street_contributed_units: u64,
+    /// Whether `effective_stack_units` is meaningful.
+    pub has_effective_stack: bool,
+    /// Smallest remaining playing-opponent stack.
+    pub effective_stack_units: u64,
+    /// Number of live opponents who can still contest the pot.
+    pub live_opponents: u8,
+    /// Number of opponents that have matched the current bet.
+    pub matched_bet_opponents: u8,
+    /// Configured big blind.
+    pub big_blind_units: u64,
+    /// Current highest required street contribution.
+    pub current_bet_units: u64,
     /// Whether transcript-anchor fields are meaningful.
     pub has_transcript_anchor: bool,
     /// Next expected public sequence.
@@ -329,6 +349,16 @@ impl MthEffect {
             maximum_raise_to_units: 0,
             raise_reopened: false,
             can_check: false,
+            has_action_context: false,
+            pot_units: 0,
+            actor_stack_units: 0,
+            actor_street_contributed_units: 0,
+            has_effective_stack: false,
+            effective_stack_units: 0,
+            live_opponents: 0,
+            matched_bet_opponents: 0,
+            big_blind_units: 0,
+            current_bet_units: 0,
             has_transcript_anchor: false,
             next_sequence: 0,
             transcript_digest: [0; 32],
@@ -359,6 +389,20 @@ impl From<BoundaryEffect> for MthEffect {
             effect.maximum_raise_to_units = legal.maximum_raise_to_units();
             effect.raise_reopened = legal.raise_reopened();
             effect.can_check = legal.can_check();
+        }
+        if let Some(context) = value.action_context() {
+            effect.has_action_context = true;
+            effect.pot_units = context.pot_units();
+            effect.actor_stack_units = context.actor_stack_units();
+            effect.actor_street_contributed_units = context.actor_street_contributed_units();
+            context.effective_stack_units().inspect(|effective| {
+                effect.has_effective_stack = true;
+                effect.effective_stack_units = *effective;
+            });
+            effect.live_opponents = context.live_opponents();
+            effect.matched_bet_opponents = context.matched_bet_opponents();
+            effect.big_blind_units = context.big_blind_units();
+            effect.current_bet_units = context.current_bet_units();
         }
         value.transcript_anchor().inspect(|anchor| {
             effect.has_transcript_anchor = true;

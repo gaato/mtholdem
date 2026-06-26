@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use mental_card_core::error::{Error, ErrorCategory, Result, protocol};
-use mtholdem::betting::{BetAction, LegalActions};
+use mtholdem::betting::{ActionContext, BetAction, LegalActions};
 use mtholdem::checkpoint::{CertifiedCheckpoint, CheckpointState};
 use mtholdem::recovery::RecoveryBundle;
 use mtholdem::transcript::TranscriptAnchor;
@@ -352,6 +352,86 @@ impl From<LegalActions> for BoundaryLegalActions {
     }
 }
 
+/// Public betting context for non-Rust host boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundaryActionContext {
+    pot_units: u64,
+    actor_stack_units: u64,
+    actor_street_contributed_units: u64,
+    effective_stack_units: Option<u64>,
+    live_opponents: u8,
+    matched_bet_opponents: u8,
+    big_blind_units: u64,
+    current_bet_units: u64,
+}
+
+impl BoundaryActionContext {
+    /// Returns the current pot before the actor chooses.
+    #[must_use]
+    pub const fn pot_units(self) -> u64 {
+        self.pot_units
+    }
+
+    /// Returns the actor's remaining stack before choosing.
+    #[must_use]
+    pub const fn actor_stack_units(self) -> u64 {
+        self.actor_stack_units
+    }
+
+    /// Returns the actor's current street contribution.
+    #[must_use]
+    pub const fn actor_street_contributed_units(self) -> u64 {
+        self.actor_street_contributed_units
+    }
+
+    /// Returns the effective opponent stack, if a playing opponent remains.
+    #[must_use]
+    pub const fn effective_stack_units(self) -> Option<u64> {
+        self.effective_stack_units
+    }
+
+    /// Returns the number of live opponents.
+    #[must_use]
+    pub const fn live_opponents(self) -> u8 {
+        self.live_opponents
+    }
+
+    /// Returns the number of opponents that have matched the current bet.
+    #[must_use]
+    pub const fn matched_bet_opponents(self) -> u8 {
+        self.matched_bet_opponents
+    }
+
+    /// Returns the configured big blind.
+    #[must_use]
+    pub const fn big_blind_units(self) -> u64 {
+        self.big_blind_units
+    }
+
+    /// Returns the current highest required street contribution.
+    #[must_use]
+    pub const fn current_bet_units(self) -> u64 {
+        self.current_bet_units
+    }
+}
+
+impl From<ActionContext> for BoundaryActionContext {
+    fn from(value: ActionContext) -> Self {
+        Self {
+            pot_units: value.pot().units(),
+            actor_stack_units: value.actor_stack().units(),
+            actor_street_contributed_units: value.actor_street_contributed().units(),
+            effective_stack_units: value.effective_stack().map(Chips::units),
+            live_opponents: u8::try_from(value.live_opponents())
+                .expect("player count fits boundary opponent count"),
+            matched_bet_opponents: u8::try_from(value.matched_bet_opponents())
+                .expect("player count fits boundary opponent count"),
+            big_blind_units: value.big_blind().units(),
+            current_bet_units: value.current_bet().units(),
+        }
+    }
+}
+
 /// Host effect kind for byte-oriented adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -425,6 +505,7 @@ pub struct BoundaryEffect {
     kind: BoundaryEffectKind,
     seat: Option<u8>,
     legal_actions: Option<BoundaryLegalActions>,
+    action_context: Option<BoundaryActionContext>,
     transcript_anchor: Option<BoundaryTranscriptAnchor>,
     artifact: Vec<u8>,
     checkpoint: Option<Vec<u8>>,
@@ -448,6 +529,12 @@ impl BoundaryEffect {
     #[must_use]
     pub const fn legal_actions(&self) -> Option<BoundaryLegalActions> {
         self.legal_actions
+    }
+
+    /// Returns public action context for [`BoundaryEffectKind::RequestAction`].
+    #[must_use]
+    pub const fn action_context(&self) -> Option<BoundaryActionContext> {
+        self.action_context
     }
 
     /// Returns the transcript anchor for [`BoundaryEffectKind::Persist`].
@@ -479,6 +566,7 @@ impl BoundaryEffect {
             kind: BoundaryEffectKind::BroadcastPublic,
             seat: None,
             legal_actions: None,
+            action_context: None,
             transcript_anchor: None,
             artifact: message.to_bytes()?,
             checkpoint: None,
@@ -499,6 +587,7 @@ pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
             kind: BoundaryEffectKind::SendPrivate,
             seat: Some(recipient.to_u8()),
             legal_actions: None,
+            action_context: None,
             transcript_anchor: None,
             artifact: message.to_bytes(),
             checkpoint: None,
@@ -511,6 +600,7 @@ pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
             kind: BoundaryEffectKind::Persist,
             seat: None,
             legal_actions: None,
+            action_context: None,
             transcript_anchor: Some(transcript_anchor.into()),
             artifact: Vec::new(),
             checkpoint: checkpoint.map(|value| value.to_bytes()).transpose()?,
@@ -519,10 +609,12 @@ pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
         HostEffect::RequestAction {
             actor,
             legal_actions,
+            action_context,
         } => Ok(BoundaryEffect {
             kind: BoundaryEffectKind::RequestAction,
             seat: Some(actor.to_u8()),
             legal_actions: Some(legal_actions.into()),
+            action_context: Some(action_context.into()),
             transcript_anchor: None,
             artifact: Vec::new(),
             checkpoint: None,
@@ -532,6 +624,7 @@ pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
             kind: BoundaryEffectKind::SubmitRecovery,
             seat: None,
             legal_actions: None,
+            action_context: None,
             transcript_anchor: None,
             artifact: bundle.to_bytes()?,
             checkpoint: None,
@@ -541,6 +634,7 @@ pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
             kind: BoundaryEffectKind::PublishShowdownBundle,
             seat: Some(owner.to_u8()),
             legal_actions: None,
+            action_context: None,
             transcript_anchor: None,
             artifact: bundle.to_bytes()?,
             checkpoint: None,
@@ -550,6 +644,7 @@ pub fn encode_effect(effect: HostEffect) -> Result<BoundaryEffect> {
             kind: BoundaryEffectKind::Finished,
             seat: None,
             legal_actions: None,
+            action_context: None,
             transcript_anchor: None,
             artifact: Vec::new(),
             checkpoint: None,
