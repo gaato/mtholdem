@@ -1322,6 +1322,7 @@ const fn format_intent(intent: ActionIntent) -> &'static str {
 fn format_sizing(sizing: BetSizing) -> String {
     match sizing {
         BetSizing::None => "none".to_owned(),
+        BetSizing::PreflopOpenOrIsolation => "preflop open/isolation".to_owned(),
         BetSizing::PotFraction(fraction) => format!("pot {fraction:.2}"),
         BetSizing::AllIn => "all-in".to_owned(),
     }

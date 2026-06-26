@@ -312,6 +312,8 @@ pub enum ActionIntent {
 pub enum BetSizing {
     /// No bet size is needed.
     None,
+    /// Use a standard preflop open or isolation size.
+    PreflopOpenOrIsolation,
     /// Use a fraction of the current pot.
     PotFraction(f32),
     /// Move all-in.
@@ -369,7 +371,7 @@ impl HeuristicBot {
         let intent = self
             .preflop_intent(context)
             .unwrap_or_else(|| self.intent(context, assessment));
-        let sizing = sizing(assessment, intent);
+        let sizing = sizing(context, assessment, intent);
         let action = map_to_legal_action(context, intent, sizing);
         BotDecision {
             assessment,
@@ -609,9 +611,16 @@ fn short_handed_openness(player_count: usize) -> f32 {
     capped_ratio(missing as u64, 7)
 }
 
-const fn sizing(assessment: HandAssessment, intent: ActionIntent) -> BetSizing {
+fn sizing(
+    context: &BotDecisionContext,
+    assessment: HandAssessment,
+    intent: ActionIntent,
+) -> BetSizing {
     match intent {
         ActionIntent::Bet | ActionIntent::Raise => {
+            if preflop_open_or_isolation_target(context).is_some() {
+                return BetSizing::PreflopOpenOrIsolation;
+            }
             if assessment.score >= 0.88 {
                 BetSizing::PotFraction(0.75)
             } else if assessment.score >= 0.68 {
@@ -705,19 +714,19 @@ fn map_to_legal_action(
 fn sized_raise(context: &BotDecisionContext, sizing: BetSizing) -> Option<Chips> {
     let (minimum, maximum) = legal_raise_bounds(context.legal_actions)?;
     let target = match sizing {
-        BetSizing::PotFraction(fraction) => preflop_open_or_isolation_target(context)
-            .unwrap_or_else(|| {
-                let pot = context.pot.map_or_else(
-                    || {
-                        minimum
-                            .units()
-                            .saturating_add(default_raise_span(minimum, maximum))
-                    },
-                    Chips::units,
-                );
-                let desired = minimum.units().saturating_add(scale_units(pot, fraction));
-                Chips::from_units(desired)
-            }),
+        BetSizing::PreflopOpenOrIsolation => preflop_open_or_isolation_target(context)?,
+        BetSizing::PotFraction(fraction) => {
+            let pot = context.pot.map_or_else(
+                || {
+                    minimum
+                        .units()
+                        .saturating_add(default_raise_span(minimum, maximum))
+                },
+                Chips::units,
+            );
+            let desired = minimum.units().saturating_add(scale_units(pot, fraction));
+            Chips::from_units(desired)
+        }
         BetSizing::AllIn => maximum,
         BetSizing::None => minimum,
     };
@@ -1480,11 +1489,10 @@ mod tests {
             Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
         ]));
         let mut rng = StdRng::seed_from_u64(1);
+        let decision = bot.decide(&context, &mut rng);
 
-        assert_eq!(
-            bot.choose_action(&context, &mut rng),
-            BetAction::RaiseTo(Chips::from_units(6))
-        );
+        assert_eq!(decision.sizing, BetSizing::PreflopOpenOrIsolation);
+        assert_eq!(decision.action, BetAction::RaiseTo(Chips::from_units(6)));
     }
 
     #[test]
@@ -1802,7 +1810,8 @@ mod tests {
     #[test]
     fn preflop_sizing_isolates_over_limpers() {
         let context = big_blind_after_limpers_context();
-        let target = sized_raise(&context, BetSizing::PotFraction(0.5)).expect("raise target");
+        let target =
+            sized_raise(&context, BetSizing::PreflopOpenOrIsolation).expect("raise target");
         assert_eq!(target, Chips::from_units(14));
     }
 
