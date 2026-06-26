@@ -29,6 +29,7 @@ struct Options {
     human: Option<Seat>,
     hands: Option<u64>,
     backend: TableBackend,
+    stats: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +55,206 @@ struct SessionOutcome {
     completed_hands: u64,
     quit: bool,
     final_stacks: Vec<Chips>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SeatStats {
+    hands: u64,
+    vpip: u64,
+    pfr: u64,
+    rfi_opportunities: u64,
+    rfi: u64,
+    three_bet: u64,
+    fold_to_open_opportunities: u64,
+    fold_to_open: u64,
+    blind_defense_opportunities: u64,
+    blind_defense: u64,
+}
+
+#[derive(Clone, Debug)]
+struct HandStats {
+    vpip: Vec<bool>,
+    pfr: Vec<bool>,
+    voluntary_opened: bool,
+    open_raiser: Option<Seat>,
+    preflop_raise_count: u8,
+}
+
+impl HandStats {
+    fn new(players: usize) -> Self {
+        Self {
+            vpip: vec![false; players],
+            pfr: vec![false; players],
+            voluntary_opened: false,
+            open_raiser: None,
+            preflop_raise_count: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SessionStats {
+    enabled: bool,
+    seats: Vec<SeatStats>,
+    current: HandStats,
+}
+
+impl SessionStats {
+    fn new(players: usize, enabled: bool) -> Self {
+        Self {
+            enabled,
+            seats: vec![SeatStats::default(); players],
+            current: HandStats::new(players),
+        }
+    }
+
+    fn start_hand(&mut self, stacks: &[Chips]) {
+        if !self.enabled {
+            return;
+        }
+        self.current = HandStats::new(self.seats.len());
+        for (index, stack) in stacks.iter().enumerate() {
+            if !stack.is_zero() {
+                self.seats[index].hands += 1;
+            }
+        }
+    }
+
+    fn record_action(
+        &mut self,
+        actor: Seat,
+        street: Street,
+        context: &BotDecisionContext,
+        action: BetAction,
+    ) {
+        if !self.enabled || street != Street::Preflop || actor.index() >= self.seats.len() {
+            return;
+        }
+
+        let actor_index = actor.index();
+        let is_call = matches!(action, BetAction::Call);
+        let is_raise = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
+            && context.legal_actions.minimum_raise_to().is_some();
+        let is_voluntary = is_call || is_raise;
+        let unopened_blinds = context
+            .big_blind
+            .zip(context.current_bet)
+            .is_some_and(|(big_blind, current_bet)| {
+                current_bet == big_blind && !context.legal_actions.can_check()
+            });
+
+        if unopened_blinds && !self.current.voluntary_opened {
+            self.seats[actor_index].rfi_opportunities += 1;
+            if is_raise {
+                self.seats[actor_index].rfi += 1;
+            }
+        }
+
+        if let Some(open_raiser) = self.current.open_raiser {
+            let facing_open = open_raiser != actor
+                && context.legal_actions.to_call() > Chips::ZERO
+                && self.current.preflop_raise_count == 1;
+            if facing_open {
+                self.seats[actor_index].fold_to_open_opportunities += 1;
+                if action == BetAction::Fold {
+                    self.seats[actor_index].fold_to_open += 1;
+                }
+            }
+
+            let posted_blind = context
+                .actor_street_contributed
+                .is_some_and(|contributed| contributed > Chips::ZERO);
+            if facing_open && posted_blind {
+                self.seats[actor_index].blind_defense_opportunities += 1;
+                if is_call || is_raise {
+                    self.seats[actor_index].blind_defense += 1;
+                }
+            }
+        }
+
+        if is_voluntary && !self.current.vpip[actor_index] {
+            self.current.vpip[actor_index] = true;
+            self.seats[actor_index].vpip += 1;
+        }
+
+        if is_raise {
+            if self.current.preflop_raise_count >= 1 {
+                self.seats[actor_index].three_bet += 1;
+            }
+            if !self.current.pfr[actor_index] {
+                self.current.pfr[actor_index] = true;
+                self.seats[actor_index].pfr += 1;
+            }
+            self.current.preflop_raise_count = self.current.preflop_raise_count.saturating_add(1);
+            self.current.open_raiser.get_or_insert(actor);
+        }
+
+        if is_voluntary {
+            self.current.voluntary_opened = true;
+        }
+    }
+
+    fn write_summary(&self, output: &mut impl Write) -> mtholdem::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        writeln!(output, "bot action stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(
+            output,
+            "seat hands vpip pfr rfi 3bet fold-to-open blind-defense"
+        )
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        let mut total = SeatStats::default();
+        for stats in &self.seats {
+            accumulate_stats(&mut total, stats);
+        }
+        write_stats_row(output, "all", &total)?;
+        for (index, stats) in self.seats.iter().enumerate() {
+            write_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        Ok(())
+    }
+}
+
+fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
+    total.hands += stats.hands;
+    total.vpip += stats.vpip;
+    total.pfr += stats.pfr;
+    total.rfi_opportunities += stats.rfi_opportunities;
+    total.rfi += stats.rfi;
+    total.three_bet += stats.three_bet;
+    total.fold_to_open_opportunities += stats.fold_to_open_opportunities;
+    total.fold_to_open += stats.fold_to_open;
+    total.blind_defense_opportunities += stats.blind_defense_opportunities;
+    total.blind_defense += stats.blind_defense;
+}
+
+fn write_stats_row(
+    output: &mut impl Write,
+    label: &str,
+    stats: &SeatStats,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "{label} {} {} {} {} {} {} {}",
+        stats.hands,
+        format_rate(stats.vpip, stats.hands),
+        format_rate(stats.pfr, stats.hands),
+        format_rate(stats.rfi, stats.rfi_opportunities),
+        stats.three_bet,
+        format_rate(stats.fold_to_open, stats.fold_to_open_opportunities),
+        format_rate(stats.blind_defense, stats.blind_defense_opportunities),
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn format_rate(numerator: u64, denominator: u64) -> String {
+    if denominator == 0 {
+        return "-".to_owned();
+    }
+    let percent = numerator.saturating_mul(1000) / denominator;
+    format!("{}.{:01}%({numerator}/{denominator})", percent / 10, percent % 10)
 }
 
 #[derive(Clone, Debug)]
@@ -152,6 +353,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         human: Some(Seat::new(0).expect("seat zero is valid")),
         hands: None,
         backend: TableBackend::Peer,
+        stats: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -182,6 +384,9 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             "--backend" => {
                 index += 1;
                 options.backend = parse_backend(args.get(index).map(String::as_str))?;
+            }
+            "--stats" => {
+                options.stats = true;
             }
             other => return Err(format!("unknown play-bot option: {other}")),
         }
@@ -248,7 +453,7 @@ fn parse_seat(value: Option<&str>) -> Result<Seat, String> {
 
 fn print_play_bot_help() {
     println!(
-        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only]"
+        "usage: mtholdem play-bot [--players N] [--seed N] [--bot PRESET] [--human SEAT] [--hands N] [--bots-only] [--backend peer|rules-only] [--stats]"
     );
     println!("presets: nit, balanced, loose-passive, lag, maniac");
     println!("human seat defaults to seat0 and runs until quit; use --hands N to bound it");
@@ -256,6 +461,7 @@ fn print_play_bot_help() {
     println!("human seats: 0, 1, ... or seat0, seat1, ...");
     println!("human actions: fold, check, call, bet N, raise N, quit");
     println!("backends: peer, rules-only");
+    println!("--stats prints preflop VPIP/PFR/RFI/3bet/fold-to-open/blind-defense rates");
     println!("board updates are printed as flop, turn, and river when cards open");
 }
 
@@ -271,19 +477,23 @@ fn run_session(
     });
     let mut outcome = SessionOutcome::default();
     let mut table = TableState::new(options.players);
+    let mut stats = SessionStats::new(options.players, options.stats);
     outcome.final_stacks.clone_from(&table.stacks);
     loop {
         if hand_limit.is_some_and(|limit| outcome.completed_hands >= limit) {
+            stats.write_summary(output)?;
             return Ok(outcome);
         }
         if !table.can_continue() {
+            stats.write_summary(output)?;
             return Ok(outcome);
         }
         let hand_number = HandNumber::from_u64(outcome.completed_hands);
         writeln!(output, "=== hand {} ===", hand_number.to_u64())
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         write_table_state(options.backend, &table, output)?;
-        match run_hand(options, hand_number, &table, input, output)? {
+        stats.start_hand(&table.stacks);
+        match run_hand(options, hand_number, &table, &mut stats, input, output)? {
             HandOutcome::Finished(result) => {
                 outcome.completed_hands += 1;
                 writeln!(
@@ -308,6 +518,7 @@ fn run_session(
             }
             HandOutcome::Quit => {
                 outcome.quit = true;
+                stats.write_summary(output)?;
                 return Ok(outcome);
             }
         }
@@ -338,12 +549,15 @@ fn run_hand(
     options: Options,
     hand_number: HandNumber,
     table: &TableState,
+    stats: &mut SessionStats,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> mtholdem::Result<HandOutcome> {
     match options.backend {
-        TableBackend::Peer => run_peer_hand(options, hand_number, table, input, output),
-        TableBackend::RulesOnly => run_rules_only_hand(options, hand_number, table, input, output),
+        TableBackend::Peer => run_peer_hand(options, hand_number, table, stats, input, output),
+        TableBackend::RulesOnly => {
+            run_rules_only_hand(options, hand_number, table, stats, input, output)
+        }
     }
 }
 
@@ -351,6 +565,7 @@ fn run_peer_hand(
     options: Options,
     hand_number: HandNumber,
     table: &TableState,
+    stats: &mut SessionStats,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> mtholdem::Result<HandOutcome> {
@@ -407,13 +622,14 @@ fn run_peer_hand(
         bot_rng: StdRng::seed_from_u64(options.seed),
         crypto_rng,
     }
-    .run(options.human, input, output)
+    .run(options.human, stats, input, output)
 }
 
 fn run_rules_only_hand(
     options: Options,
     hand_number: HandNumber,
     table: &TableState,
+    stats: &mut SessionStats,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> mtholdem::Result<HandOutcome> {
@@ -457,6 +673,7 @@ fn run_rules_only_hand(
                     return Ok(HandOutcome::Quit);
                 };
                 print_action(actor, street, action, legal_actions);
+                stats.record_action(actor, street, &context, action);
                 hand.apply_action(actor, action)?;
             }
             HandProgress::AwaitingFlop => {
@@ -521,11 +738,12 @@ impl InProcessHand {
     fn run(
         mut self,
         human: Option<Seat>,
+        stats: &mut SessionStats,
         input: &mut impl BufRead,
         output: &mut impl Write,
     ) -> mtholdem::Result<HandOutcome> {
         for index in 0..self.sessions.len() {
-            if self.progress_and_handle(index, human, input, output)? {
+            if self.progress_and_handle(index, human, stats, input, output)? {
                 return Ok(HandOutcome::Quit);
             }
         }
@@ -548,7 +766,7 @@ impl InProcessHand {
                             continue;
                         }
                         self.sessions[index].apply_public_bytes(&bytes, &mut self.crypto_rng)?;
-                        if self.progress_and_handle(index, human, input, output)? {
+                        if self.progress_and_handle(index, human, stats, input, output)? {
                             return Ok(HandOutcome::Quit);
                         }
                     }
@@ -556,7 +774,7 @@ impl InProcessHand {
                 QueuedEffect::Private { recipient, bytes } => {
                     let index = recipient.index();
                     self.sessions[index].apply_private_bytes(&bytes)?;
-                    if self.progress_and_handle(index, human, input, output)? {
+                    if self.progress_and_handle(index, human, stats, input, output)? {
                         return Ok(HandOutcome::Quit);
                     }
                 }
@@ -566,7 +784,7 @@ impl InProcessHand {
                             continue;
                         }
                         self.sessions[index].apply_showdown_bundle((*bundle).clone())?;
-                        if self.progress_and_handle(index, human, input, output)? {
+                        if self.progress_and_handle(index, human, stats, input, output)? {
                             return Ok(HandOutcome::Quit);
                         }
                     }
@@ -590,6 +808,7 @@ impl InProcessHand {
         &mut self,
         index: usize,
         human: Option<Seat>,
+        stats: &mut SessionStats,
         input: &mut impl BufRead,
         output: &mut impl Write,
     ) -> mtholdem::Result<bool> {
@@ -601,7 +820,7 @@ impl InProcessHand {
                 return Ok(false);
             }
             for effect in effects {
-                if self.handle_effect(index, effect, human, input, output)? {
+                if self.handle_effect(index, effect, human, stats, input, output)? {
                     return Ok(true);
                 }
             }
@@ -613,6 +832,7 @@ impl InProcessHand {
         sender_index: usize,
         effect: HostEffect,
         human: Option<Seat>,
+        stats: &mut SessionStats,
         input: &mut impl BufRead,
         output: &mut impl Write,
     ) -> mtholdem::Result<bool> {
@@ -647,6 +867,7 @@ impl InProcessHand {
                     return Ok(true);
                 };
                 print_action(actor, street, action, legal_actions);
+                stats.record_action(actor, street, &context, action);
                 self.sessions[sender_index].submit_action(action)?;
                 self.sessions[sender_index].progress(&mut self.crypto_rng)?;
                 self.write_board_updates(output)?;
@@ -1001,6 +1222,7 @@ mod tests {
 
     #[test]
     fn play_bot_finishes_one_hand_and_conserves_chips() {
+        let mut stats = SessionStats::new(2, false);
         let result = finished_hand(
             run_hand(
                 Options {
@@ -1010,9 +1232,11 @@ mod tests {
                     human: None,
                     hands: None,
                     backend: TableBackend::Peer,
+                    stats: false,
                 },
                 HandNumber::FIRST,
                 &TableState::new(2),
+                &mut stats,
                 &mut io::empty(),
                 &mut io::sink(),
             )
@@ -1034,6 +1258,7 @@ mod tests {
         let script = "call\ncheck\n".repeat(20);
         let mut input = script.as_bytes();
         let mut output = Vec::new();
+        let mut stats = SessionStats::new(2, false);
         let result = finished_hand(
             run_hand(
                 Options {
@@ -1043,9 +1268,11 @@ mod tests {
                     human: Some(Seat::new(0).expect("seat")),
                     hands: None,
                     backend: TableBackend::Peer,
+                    stats: false,
                 },
                 HandNumber::FIRST,
                 &TableState::new(2),
+                &mut stats,
                 &mut input,
                 &mut output,
             )
@@ -1077,6 +1304,7 @@ mod tests {
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(1),
                 backend: TableBackend::RulesOnly,
+                stats: false,
             },
             &mut input,
             &mut output,
@@ -1101,6 +1329,7 @@ mod tests {
                 human: None,
                 hands: Some(1),
                 backend: TableBackend::RulesOnly,
+                stats: false,
             },
             &mut io::empty(),
             &mut output,
@@ -1116,6 +1345,7 @@ mod tests {
 
     #[test]
     fn play_bot_config_supports_larger_tables() {
+        let mut stats = SessionStats::new(4, false);
         let result = finished_hand(
             run_hand(
                 Options {
@@ -1125,9 +1355,11 @@ mod tests {
                     human: None,
                     hands: None,
                     backend: TableBackend::Peer,
+                    stats: false,
                 },
                 HandNumber::FIRST,
                 &TableState::new(4),
+                &mut stats,
                 &mut io::empty(),
                 &mut io::sink(),
             )
@@ -1157,6 +1389,7 @@ mod tests {
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(2),
                 backend: TableBackend::Peer,
+                stats: false,
             },
             &mut input,
             &mut output,
@@ -1179,6 +1412,7 @@ mod tests {
                 human: Some(Seat::new(0).expect("seat")),
                 hands: None,
                 backend: TableBackend::Peer,
+                stats: false,
             },
             &mut input,
             &mut output,
@@ -1200,6 +1434,7 @@ mod tests {
                 human: None,
                 hands: None,
                 backend: TableBackend::Peer,
+                stats: false,
             },
             &mut io::empty(),
             &mut output,
@@ -1221,6 +1456,7 @@ mod tests {
                 human: None,
                 hands: Some(2),
                 backend: TableBackend::Peer,
+                stats: false,
             },
             &mut io::empty(),
             &mut output,
@@ -1242,6 +1478,7 @@ mod tests {
                 human: None,
                 hands: Some(2),
                 backend: TableBackend::Peer,
+                stats: false,
             },
             &mut io::empty(),
             &mut output,
@@ -1286,6 +1523,7 @@ mod tests {
                 human: None,
                 hands: Some(2),
                 backend: TableBackend::RulesOnly,
+                stats: false,
             },
             &mut io::empty(),
             &mut output,
@@ -1316,6 +1554,31 @@ mod tests {
                 .sum::<u64>(),
             300
         );
+    }
+
+    #[test]
+    fn bots_only_stats_print_preflop_rates() {
+        let mut output = Vec::new();
+        let outcome = run_session(
+            Options {
+                players: 3,
+                seed: 7,
+                preset: BotPreset::Balanced,
+                human: None,
+                hands: Some(2),
+                backend: TableBackend::RulesOnly,
+                stats: true,
+            },
+            &mut io::empty(),
+            &mut output,
+        )
+        .expect("stats session finishes");
+
+        assert_eq!(outcome.completed_hands, 2);
+        let output = String::from_utf8(output).expect("utf8");
+        assert!(output.contains("bot action stats:"));
+        assert!(output.contains("vpip pfr rfi 3bet fold-to-open blind-defense"));
+        assert!(output.contains("all 6 "));
     }
 
     #[test]
@@ -1429,6 +1692,12 @@ mod tests {
         let options = parse_options(&["--backend".to_owned(), "rules-only".to_owned()])
             .expect("rules-only options");
         assert_eq!(options.backend, TableBackend::RulesOnly);
+    }
+
+    #[test]
+    fn play_bot_can_enable_stats() {
+        let options = parse_options(&["--stats".to_owned()]).expect("stats options");
+        assert!(options.stats);
     }
 
     #[test]
