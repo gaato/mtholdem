@@ -710,7 +710,7 @@ fn sized_raise(context: &BotDecisionContext, sizing: BetSizing) -> Option<Chips>
 }
 
 fn preflop_open_or_isolation_target(context: &BotDecisionContext) -> Option<Chips> {
-    if context.street != Street::Preflop || !context.legal_actions.can_check() {
+    if context.street != Street::Preflop || context.current_bet? != context.big_blind? {
         return None;
     }
     let big_blind = context.big_blind?.units();
@@ -718,7 +718,12 @@ fn preflop_open_or_isolation_target(context: &BotDecisionContext) -> Option<Chip
         return None;
     }
     let matched = context.matched_bet_opponents.unwrap_or(0) as u64;
-    let target_blinds = 3_u64.saturating_add(matched);
+    let limpers = if context.legal_actions.can_check() {
+        matched
+    } else {
+        matched.saturating_sub(1)
+    };
+    let target_blinds = 3_u64.saturating_add(limpers);
     Some(Chips::from_units(big_blind.saturating_mul(target_blinds)))
 }
 
@@ -1420,6 +1425,36 @@ mod tests {
             bot.choose_action(&context, &mut rng),
             BetAction::RaiseTo(_)
         ));
+    }
+
+    #[test]
+    fn balanced_bot_uses_three_big_blind_open_size() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = six_max_unopened_context(3, &[]).with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert_eq!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(Chips::from_units(6))
+        );
+    }
+
+    #[test]
+    fn balanced_bot_adds_limpers_to_preflop_isolation_size() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = big_blind_after_limpers_context().with_hole_cards(Some([
+            Card::new(Rank::Ace, mtholdem::Suit::Clubs),
+            Card::new(Rank::Ace, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert_eq!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(Chips::from_units(14))
+        );
     }
 
     #[test]
