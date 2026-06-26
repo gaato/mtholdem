@@ -323,6 +323,7 @@ struct InProcessHand {
     bot: HeuristicBot,
     bot_rng: StdRng,
     watch_bot: Option<Seat>,
+    log_hands: bool,
     crypto_rng: OsRng,
 }
 
@@ -487,8 +488,15 @@ fn print_play_bot_help() {
     println!("human actions: fold, check, call, bet N, raise N, quit");
     println!("backends: peer, rules-only");
     println!("--stats prints preflop VPIP/PFR/RFI/3bet/fold-to-open/blind-defense rates");
+    println!(
+        "        in bots-only mode, --stats suppresses per-hand logs unless --watch-bot is set"
+    );
     println!("--watch-bot SEAT runs that seat as a bot and prints its decision details");
     println!("board updates are printed as flop, turn, and river when cards open");
+}
+
+fn log_hands(options: Options) -> bool {
+    !options.stats || options.human.is_some() || options.watch_bot.is_some()
 }
 
 fn run_session(
@@ -515,30 +523,19 @@ fn run_session(
             return Ok(outcome);
         }
         let hand_number = HandNumber::from_u64(outcome.completed_hands);
-        writeln!(output, "=== hand {} ===", hand_number.to_u64())
-            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-        write_table_state(options.backend, &table, output)?;
+        let log_hands = log_hands(options);
+        if log_hands {
+            writeln!(output, "=== hand {} ===", hand_number.to_u64())
+                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+            write_table_state(options.backend, &table, output)?;
+        }
         stats.start_hand(&table.stacks);
         match run_hand(options, hand_number, &table, &mut stats, input, output)? {
             HandOutcome::Finished(result) => {
                 outcome.completed_hands += 1;
-                writeln!(
-                    output,
-                    "finished hand {} with {} players using {:?} bots",
-                    result.finished.hand().to_u64(),
-                    options.players,
-                    options.preset
-                )
-                .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-                write_showdown_summary(&result.showdown, output)?;
-                write!(output, "final stacks:")
-                    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-                for (index, stack) in result.finished.final_stacks().iter().enumerate() {
-                    write!(output, " seat{index}={}", stack.units())
-                        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+                if log_hands {
+                    write_finished_hand_summary(options, &result, output)?;
                 }
-                writeln!(output)
-                    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
                 table.advance(result.finished.final_stacks());
                 outcome.final_stacks.clone_from(&table.stacks);
             }
@@ -569,6 +566,29 @@ fn write_table_state(
         backend.name()
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
+}
+
+fn write_finished_hand_summary(
+    options: Options,
+    result: &HandResult,
+    output: &mut impl Write,
+) -> mtholdem::Result<()> {
+    writeln!(
+        output,
+        "finished hand {} with {} players using {:?} bots",
+        result.finished.hand().to_u64(),
+        options.players,
+        options.preset
+    )
+    .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    write_showdown_summary(&result.showdown, output)?;
+    write!(output, "final stacks:")
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    for (index, stack) in result.finished.final_stacks().iter().enumerate() {
+        write!(output, " seat{index}={}", stack.units())
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+    }
+    writeln!(output).map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
 
 fn run_hand(
@@ -647,6 +667,7 @@ fn run_peer_hand(
         bot: HeuristicBot::from_preset(options.preset),
         bot_rng: StdRng::seed_from_u64(options.seed),
         watch_bot: options.watch_bot,
+        log_hands: log_hands(options),
         crypto_rng,
     }
     .run(options.human, stats, input, output)
@@ -677,6 +698,7 @@ fn run_rules_only_hand(
         table.maximum_stack(),
     )?;
     let bot = HeuristicBot::from_preset(options.preset);
+    let log_hands = log_hands(options);
 
     loop {
         match hand.progress() {
@@ -705,7 +727,9 @@ fn run_rules_only_hand(
                 let HumanInput::Action(action) = action else {
                     return Ok(HandOutcome::Quit);
                 };
-                write_action(actor, street, action, legal_actions, output)?;
+                if log_hands {
+                    write_action(actor, street, action, legal_actions, output)?;
+                }
                 stats.record_action(actor, street, &context, action);
                 hand.apply_action(actor, action)?;
             }
@@ -716,15 +740,21 @@ fn run_rules_only_hand(
                     draw_card(&mut deck)?,
                 ];
                 hand.open_flop(flop)?;
-                write_board_line("flop", hand.board(), output)?;
+                if log_hands {
+                    write_board_line("flop", hand.board(), output)?;
+                }
             }
             HandProgress::AwaitingTurn => {
                 hand.open_turn(draw_card(&mut deck)?)?;
-                write_board_line("turn", hand.board(), output)?;
+                if log_hands {
+                    write_board_line("turn", hand.board(), output)?;
+                }
             }
             HandProgress::AwaitingRiver => {
                 hand.open_river(draw_card(&mut deck)?)?;
-                write_board_line("river", hand.board(), output)?;
+                if log_hands {
+                    write_board_line("river", hand.board(), output)?;
+                }
             }
             HandProgress::Showdown => {
                 let mut opened = Vec::new();
@@ -846,7 +876,9 @@ impl InProcessHand {
         output: &mut impl Write,
     ) -> mtholdem::Result<bool> {
         self.sessions[index].progress(&mut self.crypto_rng)?;
-        self.write_board_updates(output)?;
+        if self.log_hands {
+            self.write_board_updates(output)?;
+        }
         loop {
             let effects = self.sessions[index].drain_effects();
             if effects.is_empty() {
@@ -905,11 +937,15 @@ impl InProcessHand {
                 let HumanInput::Action(action) = action else {
                     return Ok(true);
                 };
-                write_action(actor, street, action, legal_actions, output)?;
+                if self.log_hands {
+                    write_action(actor, street, action, legal_actions, output)?;
+                }
                 stats.record_action(actor, street, &context, action);
                 self.sessions[sender_index].submit_action(action)?;
                 self.sessions[sender_index].progress(&mut self.crypto_rng)?;
-                self.write_board_updates(output)?;
+                if self.log_hands {
+                    self.write_board_updates(output)?;
+                }
             }
             HostEffect::PublishShowdownBundle { owner, bundle } => {
                 self.queue.push_back(QueuedEffect::Showdown {
@@ -1119,12 +1155,7 @@ fn write_bot_watch(
         "decision: intent={} sizing={} action={}",
         format_intent(decision.intent),
         format_sizing(decision.sizing),
-        format_action(
-            context.actor,
-            context.street,
-            decision.action,
-            context.legal_actions
-        )
+        format_action_name(context.street, decision.action, context.legal_actions)
     )
     .map_err(|error| mental_card_core::error::protocol(error.to_string()))
 }
@@ -1368,6 +1399,19 @@ fn format_action(actor: Seat, street: Street, action: BetAction, legal: LegalAct
     }
 }
 
+fn format_action_name(street: Street, action: BetAction, legal: LegalActions) -> String {
+    match action {
+        BetAction::Fold => "fold".to_owned(),
+        BetAction::Check => "check".to_owned(),
+        BetAction::Call => "call".to_owned(),
+        BetAction::RaiseTo(amount) if is_open_bet(street, legal) => {
+            format!("bet {}", amount.units())
+        }
+        BetAction::RaiseTo(amount) => format!("raise to {}", amount.units()),
+        BetAction::AllIn => "all-in".to_owned(),
+    }
+}
+
 fn is_open_bet(street: Street, legal: LegalActions) -> bool {
     street != Street::Preflop && legal.to_call().is_zero()
 }
@@ -1467,7 +1511,7 @@ mod tests {
         let outcome = run_session(
             Options {
                 players: 3,
-                seed: 12,
+                seed: 29,
                 preset: BotPreset::Balanced,
                 human: Some(Seat::new(0).expect("seat")),
                 hands: Some(1),
@@ -1493,7 +1537,7 @@ mod tests {
         let outcome = run_session(
             Options {
                 players: 3,
-                seed: 4,
+                seed: 1,
                 preset: BotPreset::Maniac,
                 human: None,
                 hands: Some(1),
@@ -1757,6 +1801,8 @@ mod tests {
         assert!(output.contains("bot action stats:"));
         assert!(output.contains("vpip pfr rfi 3bet fold-to-open blind-defense"));
         assert!(output.contains("all 6 "));
+        assert!(!output.contains("=== hand"));
+        assert!(!output.contains("starting stacks:"));
     }
 
     #[test]
@@ -1785,6 +1831,7 @@ mod tests {
         assert!(output.contains("assessment:"));
         assert!(output.contains("decision:"));
         assert!(output.contains("preflop: seat 0"));
+        assert!(!output.contains("action=preflop:"));
     }
 
     #[test]

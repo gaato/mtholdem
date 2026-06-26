@@ -127,7 +127,8 @@ human seat folds. Bot hole cards are shown only when publicly opened at
 showdown. Multi-hand runs carry final stacks into the next hand and print the
 selected backend, starting stacks, and button at each hand boundary.
 `--stats` adds bot-action telemetry for VPIP, PFR, RFI, 3-bet,
-fold-to-open, and blind defense.
+fold-to-open, and blind defense. In bots-only mode, `--stats` suppresses
+per-hand logs unless `--watch-bot` is also set.
 `--watch-bot seatN` runs that seat as a bot and prints its private hand plus
 decision diagnostics before each watched action.
 
