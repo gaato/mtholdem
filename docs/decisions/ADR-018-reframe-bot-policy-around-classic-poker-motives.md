@@ -148,10 +148,6 @@ directly into policy code.
   card inspection shortcut.
 
 ## References
-- David Sklansky, The Theory of Poker.
-  - Reference for expected value, the fundamental theorem of poker, pot odds,
-    effective odds, implied and reverse implied odds, deception, semi-bluffing,
-    raising motives, and slowplaying.
 - Fundamental theorem of poker: https://en.wikipedia.org/wiki/Fundamental_theorem_of_poker
 - General poker strategy: https://en.wikipedia.org/wiki/Poker_strategy
 - Poker probability: https://en.wikipedia.org/wiki/Poker_probability
