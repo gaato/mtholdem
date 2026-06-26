@@ -48,6 +48,12 @@ The bot architecture should remain:
 2. **Equity estimation** inside `HandAssessment`.
    - Preflop uses a hand table plus position/player-count adjustments rather
      than raw rollout equity.
+   - Unopened preflop raise-first-in decisions should come from a
+     position/player-count range skeleton, not from comparing raw showdown
+     equity against the number of remaining opponents.
+   - Pot odds and equity are primarily for facing-bet/facing-raise continue
+     decisions and postflop pressure, not the main driver for opening an
+     unopened pot.
    - Flop and turn may use bounded Monte Carlo trials over unknown cards,
      initially with broad random opponent ranges.
    - River uses deterministic evaluation because all public cards are known.
@@ -55,6 +61,9 @@ The bot architecture should remain:
    - Start with simple range buckets such as random, limp/call, open-raise,
      call-raise, and aggressive postflop lines.
    - Use action history and public context to weight opponent samples.
+   - Preflop range buckets should distinguish unopened RFI, limp/call,
+     call-open, 3-bet, and blind-defense situations before they feed postflop
+     range-aware equity.
    - Keep the model inspectable and deterministic under a supplied RNG.
 4. **Intent and sizing policy** after assessment.
    - Equity does not directly choose actions.
@@ -107,6 +116,16 @@ fix the preflop model before further postflop tuning.
 - Rejected: Start broad if needed, but design the estimator around range-aware
   sampling from the beginning.
 
+### Use raw preflop equity thresholds for opening decisions
+- Pros: Simple and reuses the same equity estimator across streets.
+- Cons: Early-position and multiway spots are suppressed by the number of
+  remaining opponents, causing excessive folds, too few raises, weak blind
+  defense, and repeated walks. This is also not how human preflop opening
+  ranges are normally expressed.
+- Rejected: Use position/player-count/action-state range skeletons for
+  preflop, then use pot odds and range-aware equity for continue and postflop
+  decisions.
+
 ### Build a solver-like bot
 - Pros: Better theoretical target and closer to strong poker AI research.
 - Cons: Too much complexity for local practice, Godot single-player, and the
@@ -143,6 +162,9 @@ fix the preflop model before further postflop tuning.
   ranges should be tighter than button ranges, unopened late-position steal
   attempts should exist, calling should respect pot odds and multiway pressure,
   and continuation betting should vary by board texture and opponent count.
+- Preflop policy should be the next implementation focus when telemetry shows
+  over-folding. Postflop Monte Carlo cannot make the opponent feel natural if
+  most hands end before the flop.
 
 ## Implementation References
 - eval7: https://github.com/julianandrews/pyeval7

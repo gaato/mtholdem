@@ -194,6 +194,8 @@ Those metrics should be checked against human-oriented no-limit Hold'em
 baselines such as position-aware tight-aggressive opening, small unopened
 preflop raises, pot-odds-aware calls, and lower multiway continuation-bet
 frequency.
+If telemetry shows over-folding before the flop, fix the preflop range skeleton
+before tuning postflop Monte Carlo behavior.
 
 ## Host table events and future runner
 
