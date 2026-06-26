@@ -34,15 +34,25 @@ tendencies, and the different reasons to raise, call, check, bet, or fold.
 Those concepts are imperfect heuristics rather than solver guarantees, but they
 are a better baseline for an inspectable local opponent.
 
+The guiding principle should be the fundamental theorem of poker: the ideal
+decision is the expected-value-maximizing action one would choose with complete
+knowledge of an opponent's hidden cards and strategy. `mtholdem-bot` cannot and
+must not inspect hidden opponent cards. It should approximate that ideal from
+the information a real seat has: its own hole cards, public board cards, public
+action context, legal actions, stack and pot state, range assumptions, and
+bounded probability estimates.
+
 ## Decision
-Reframe `mtholdem-bot` around classic poker situation and motive vocabulary.
-The current assessment/intent/sizing shape from ADR-013 is superseded as the
+Reframe `mtholdem-bot` around the fundamental theorem of poker, then express
+its approximation through classic poker situation and motive vocabulary. The
+current assessment/intent/sizing shape from ADR-013 is superseded as the
 long-term public and diagnostic model.
 
 The bot may still compute numeric evidence such as equity, hand class, draw
-outs, pot odds, stack pressure, and range weights. Those numbers should feed a
-named poker situation and a named betting motive instead of becoming the public
-reason for the action.
+outs, draw-completion probability, pot odds, effective odds, implied and
+reverse implied odds, stack pressure, and range weights. Those numbers should
+feed a named poker situation and a named betting motive instead of becoming the
+public reason for the action.
 
 The next bot design should prefer concepts like:
 
@@ -63,6 +73,12 @@ Equity remains important, especially for facing-bet decisions and postflop
 simulation. It is evidence, not the action selector. A bot should be able to
 say "semi-bluff with strong draw and fold equity" or "call because price is
 good" rather than exposing only "score above threshold".
+
+Poker probabilities are separate from showdown equity. Draw-completion
+probabilities and 5-card or 7-card hand frequencies are useful for draw
+classification, pot-odds decisions, evaluator sanity checks, and Monte Carlo
+distribution tests. They should not be confused with win probability against a
+particular opponent range.
 
 `BotDecisionContext`, profile presets, `choose_action`, public-information
 boundaries, and bounded Monte Carlo remain useful. They should be retained or
@@ -127,8 +143,17 @@ directly into policy code.
   pressure fold.
 - Bounded Monte Carlo remains an input to equity and range evidence, not a
   solver or direct action oracle.
+- Tests and diagnostics should preserve the incomplete-information boundary:
+  even rules-only local play must not turn the fundamental theorem into a hidden
+  card inspection shortcut.
 
 ## References
+- David Sklansky, The Theory of Poker.
+  - Reference for expected value, the fundamental theorem of poker, pot odds,
+    effective odds, implied and reverse implied odds, deception, semi-bluffing,
+    raising motives, and slowplaying.
+- Fundamental theorem of poker: https://en.wikipedia.org/wiki/Fundamental_theorem_of_poker
 - General poker strategy: https://en.wikipedia.org/wiki/Poker_strategy
+- Poker probability: https://en.wikipedia.org/wiki/Poker_probability
 - Poker position: https://en.wikipedia.org/wiki/Position_%28poker%29
 - General Texas Hold'em strategy: https://en.wikipedia.org/wiki/Texas_hold_%27em#Strategy
