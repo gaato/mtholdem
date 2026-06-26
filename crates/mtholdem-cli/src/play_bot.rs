@@ -85,17 +85,17 @@ struct HandStats {
     pfr: Vec<bool>,
     voluntary_opened: bool,
     open_raiser: Option<Seat>,
-    preflop_raise_count: u8,
+    dealt_player_count: usize,
 }
 
 impl HandStats {
-    fn new(players: usize) -> Self {
+    fn new(players: usize, dealt_player_count: usize) -> Self {
         Self {
             vpip: vec![false; players],
             pfr: vec![false; players],
             voluntary_opened: false,
             open_raiser: None,
-            preflop_raise_count: 0,
+            dealt_player_count,
         }
     }
 }
@@ -104,6 +104,7 @@ impl HandStats {
 struct SessionStats {
     enabled: bool,
     seats: Vec<SeatStats>,
+    by_dealt_player_count: Vec<SeatStats>,
     current: HandStats,
 }
 
@@ -112,7 +113,8 @@ impl SessionStats {
         Self {
             enabled,
             seats: vec![SeatStats::default(); players],
-            current: HandStats::new(players),
+            by_dealt_player_count: vec![SeatStats::default(); players + 1],
+            current: HandStats::new(players, players),
         }
     }
 
@@ -120,11 +122,15 @@ impl SessionStats {
         if !self.enabled {
             return;
         }
-        self.current = HandStats::new(self.seats.len());
+        let dealt_player_count = stacks.iter().filter(|stack| !stack.is_zero()).count();
+        self.current = HandStats::new(self.seats.len(), dealt_player_count);
         for (index, stack) in stacks.iter().enumerate() {
             if !stack.is_zero() {
                 self.seats[index].hands += 1;
             }
+        }
+        if let Some(stats) = self.by_dealt_player_count.get_mut(dealt_player_count) {
+            stats.hands += u64::try_from(dealt_player_count).expect("player count fits u64");
         }
     }
 
@@ -156,6 +162,7 @@ impl SessionStats {
         let is_call = matches!(action, BetAction::Call);
         let is_raise = matches!(action, BetAction::RaiseTo(_) | BetAction::AllIn)
             && context.legal_actions.minimum_raise_to().is_some();
+        let street_raise_count = context.street_raise_count.unwrap_or(0);
         let is_voluntary = is_call || is_raise;
         let unopened_blinds =
             context
@@ -166,20 +173,20 @@ impl SessionStats {
                 });
 
         if unopened_blinds && !self.current.voluntary_opened {
-            self.seats[actor_index].rfi_opportunities += 1;
+            self.update_actor_stats(actor_index, |stats| stats.rfi_opportunities += 1);
             if is_raise {
-                self.seats[actor_index].rfi += 1;
+                self.update_actor_stats(actor_index, |stats| stats.rfi += 1);
             }
         }
 
         if let Some(open_raiser) = self.current.open_raiser {
             let facing_open = open_raiser != actor
                 && context.legal_actions.to_call() > Chips::ZERO
-                && self.current.preflop_raise_count == 1;
+                && street_raise_count == 1;
             if facing_open {
-                self.seats[actor_index].fold_to_open_opportunities += 1;
+                self.update_actor_stats(actor_index, |stats| stats.fold_to_open_opportunities += 1);
                 if action == BetAction::Fold {
-                    self.seats[actor_index].fold_to_open += 1;
+                    self.update_actor_stats(actor_index, |stats| stats.fold_to_open += 1);
                 }
             }
 
@@ -187,27 +194,28 @@ impl SessionStats {
                 .actor_street_contributed
                 .is_some_and(|contributed| contributed > Chips::ZERO);
             if facing_open && posted_blind {
-                self.seats[actor_index].blind_defense_opportunities += 1;
+                self.update_actor_stats(actor_index, |stats| {
+                    stats.blind_defense_opportunities += 1;
+                });
                 if is_call || is_raise {
-                    self.seats[actor_index].blind_defense += 1;
+                    self.update_actor_stats(actor_index, |stats| stats.blind_defense += 1);
                 }
             }
         }
 
         if is_voluntary && !self.current.vpip[actor_index] {
             self.current.vpip[actor_index] = true;
-            self.seats[actor_index].vpip += 1;
+            self.update_actor_stats(actor_index, |stats| stats.vpip += 1);
         }
 
         if is_raise {
-            if self.current.preflop_raise_count >= 1 {
-                self.seats[actor_index].three_bet += 1;
+            if street_raise_count >= 1 {
+                self.update_actor_stats(actor_index, |stats| stats.three_bet += 1);
             }
             if !self.current.pfr[actor_index] {
                 self.current.pfr[actor_index] = true;
-                self.seats[actor_index].pfr += 1;
+                self.update_actor_stats(actor_index, |stats| stats.pfr += 1);
             }
-            self.current.preflop_raise_count = self.current.preflop_raise_count.saturating_add(1);
             self.current.open_raiser.get_or_insert(actor);
         }
 
@@ -217,13 +225,24 @@ impl SessionStats {
     }
 
     fn record_postflop_action(&mut self, actor: Seat, action: BetAction) {
-        let stats = &mut self.seats[actor.index()];
-        stats.postflop_actions += 1;
-        match action {
-            BetAction::RaiseTo(_) | BetAction::AllIn => stats.postflop_bet_raise += 1,
-            BetAction::Call => stats.postflop_call += 1,
-            BetAction::Fold => stats.postflop_fold += 1,
-            BetAction::Check => stats.postflop_check += 1,
+        self.update_actor_stats(actor.index(), |stats| {
+            stats.postflop_actions += 1;
+            match action {
+                BetAction::RaiseTo(_) | BetAction::AllIn => stats.postflop_bet_raise += 1,
+                BetAction::Call => stats.postflop_call += 1,
+                BetAction::Fold => stats.postflop_fold += 1,
+                BetAction::Check => stats.postflop_check += 1,
+            }
+        });
+    }
+
+    fn update_actor_stats(&mut self, actor_index: usize, update: impl Fn(&mut SeatStats)) {
+        update(&mut self.seats[actor_index]);
+        if let Some(stats) = self
+            .by_dealt_player_count
+            .get_mut(self.current.dealt_player_count)
+        {
+            update(stats);
         }
     }
 
@@ -246,6 +265,18 @@ impl SessionStats {
         for (index, stats) in self.seats.iter().enumerate() {
             write_stats_row(output, &format!("seat{index}"), stats)?;
         }
+        writeln!(output, "dealt-player action stats:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(
+            output,
+            "players hands vpip pfr rfi 3bet fold-to-open blind-defense"
+        )
+        .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_stats_row(output, &format!("p{count}"), stats)?;
+            }
+        }
         writeln!(output, "postflop action stats:")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         writeln!(output, "seat actions bet/raise call fold check")
@@ -253,6 +284,15 @@ impl SessionStats {
         write_postflop_stats_row(output, "all", &total)?;
         for (index, stats) in self.seats.iter().enumerate() {
             write_postflop_stats_row(output, &format!("seat{index}"), stats)?;
+        }
+        writeln!(output, "postflop by dealt players:")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        writeln!(output, "players actions bet/raise call fold check")
+            .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
+        for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
+            if stats.hands > 0 {
+                write_postflop_stats_row(output, &format!("p{count}"), stats)?;
+            }
         }
         Ok(())
     }
@@ -551,7 +591,7 @@ fn print_play_bot_help() {
     println!("human seats: 0, 1, ... or seat0, seat1, ...");
     println!("human actions: fold, check, call, bet N, raise N, quit");
     println!("backends: peer, rules-only");
-    println!("--stats prints preflop rates and postflop action frequencies");
+    println!("--stats prints preflop rates, postflop action frequencies, and dealt-count splits");
     println!(
         "        in bots-only mode, --stats suppresses per-hand logs unless --watch-bot is set"
     );
@@ -1875,8 +1915,11 @@ mod tests {
         let output = String::from_utf8(output).expect("utf8");
         assert!(output.contains("bot action stats:"));
         assert!(output.contains("vpip pfr rfi 3bet fold-to-open blind-defense"));
+        assert!(output.contains("dealt-player action stats:"));
+        assert!(output.contains("p3 6 "));
         assert!(output.contains("postflop action stats:"));
         assert!(output.contains("seat actions bet/raise call fold check"));
+        assert!(output.contains("postflop by dealt players:"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
         assert!(!output.contains("starting stacks:"));
