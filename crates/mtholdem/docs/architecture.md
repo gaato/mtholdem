@@ -184,6 +184,9 @@ Peer-backed and rules-only hosts should feed it the same public action context
 so sizing does not depend on backend internals. See
 [ADR-013](../../../docs/decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md)
 and [ADR-015](../../../docs/decisions/ADR-015-include-public-action-context-in-action-requests.md).
+The next opponent-quality target is a range-aware Monte Carlo heuristic, not a
+solver or self-play system; see
+[ADR-016](../../../docs/decisions/ADR-016-build-bot-as-range-aware-monte-carlo-heuristic.md).
 
 ## Host table events and future runner
 

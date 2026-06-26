@@ -127,7 +127,8 @@ opponent profile.
   opponent context; peer-backed host loops should supply equivalent public facts
   through the action-request context described in ADR-015.
 - Postflop assessment may later spend bounded CPU time on Monte Carlo equity,
-  so profiles or runners should be able to tune trial counts then.
+  so profiles or runners should be able to tune trial counts then. ADR-016
+  narrows that work to a range-aware Monte Carlo heuristic rather than a solver.
 - CLI and future Godot single-player can surface bot debug information such as
   assessment, intent, and sizing without depending on protocol internals.
 - Existing bot presets may keep their names, but their parameters should map to
