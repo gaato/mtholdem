@@ -73,7 +73,8 @@ struct SeatStats {
     blind_defense_opportunities: u64,
     blind_defense: u64,
     postflop_actions: u64,
-    postflop_bet_raise: u64,
+    postflop_bet: u64,
+    postflop_raise: u64,
     postflop_call: u64,
     postflop_fold: u64,
     postflop_check: u64,
@@ -148,7 +149,7 @@ impl SessionStats {
         if street == Street::Preflop {
             self.record_preflop_action(actor, context, action);
         } else {
-            self.record_postflop_action(actor, action);
+            self.record_postflop_action(actor, context, action);
         }
     }
 
@@ -224,11 +225,21 @@ impl SessionStats {
         }
     }
 
-    fn record_postflop_action(&mut self, actor: Seat, action: BetAction) {
+    fn record_postflop_action(
+        &mut self,
+        actor: Seat,
+        context: &BotDecisionContext,
+        action: BetAction,
+    ) {
         self.update_actor_stats(actor.index(), |stats| {
             stats.postflop_actions += 1;
             match action {
-                BetAction::RaiseTo(_) | BetAction::AllIn => stats.postflop_bet_raise += 1,
+                BetAction::RaiseTo(_) | BetAction::AllIn
+                    if context.current_bet == Some(Chips::ZERO) =>
+                {
+                    stats.postflop_bet += 1;
+                }
+                BetAction::RaiseTo(_) | BetAction::AllIn => stats.postflop_raise += 1,
                 BetAction::Call => stats.postflop_call += 1,
                 BetAction::Fold => stats.postflop_fold += 1,
                 BetAction::Check => stats.postflop_check += 1,
@@ -279,7 +290,7 @@ impl SessionStats {
         }
         writeln!(output, "postflop action stats:")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-        writeln!(output, "seat actions bet/raise call fold check")
+        writeln!(output, "seat actions bet raise call fold check")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         write_postflop_stats_row(output, "all", &total)?;
         for (index, stats) in self.seats.iter().enumerate() {
@@ -287,7 +298,7 @@ impl SessionStats {
         }
         writeln!(output, "postflop by dealt players:")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
-        writeln!(output, "players actions bet/raise call fold check")
+        writeln!(output, "players actions bet raise call fold check")
             .map_err(|error| mental_card_core::error::protocol(error.to_string()))?;
         for (count, stats) in self.by_dealt_player_count.iter().enumerate() {
             if stats.hands > 0 {
@@ -310,7 +321,8 @@ fn accumulate_stats(total: &mut SeatStats, stats: &SeatStats) {
     total.blind_defense_opportunities += stats.blind_defense_opportunities;
     total.blind_defense += stats.blind_defense;
     total.postflop_actions += stats.postflop_actions;
-    total.postflop_bet_raise += stats.postflop_bet_raise;
+    total.postflop_bet += stats.postflop_bet;
+    total.postflop_raise += stats.postflop_raise;
     total.postflop_call += stats.postflop_call;
     total.postflop_fold += stats.postflop_fold;
     total.postflop_check += stats.postflop_check;
@@ -342,9 +354,10 @@ fn write_postflop_stats_row(
 ) -> mtholdem::Result<()> {
     writeln!(
         output,
-        "{label} {} {} {} {} {}",
+        "{label} {} {} {} {} {} {}",
         stats.postflop_actions,
-        format_rate(stats.postflop_bet_raise, stats.postflop_actions),
+        format_rate(stats.postflop_bet, stats.postflop_actions),
+        format_rate(stats.postflop_raise, stats.postflop_actions),
         format_rate(stats.postflop_call, stats.postflop_actions),
         format_rate(stats.postflop_fold, stats.postflop_actions),
         format_rate(stats.postflop_check, stats.postflop_actions),
@@ -1918,7 +1931,7 @@ mod tests {
         assert!(output.contains("dealt-player action stats:"));
         assert!(output.contains("p3 6 "));
         assert!(output.contains("postflop action stats:"));
-        assert!(output.contains("seat actions bet/raise call fold check"));
+        assert!(output.contains("seat actions bet raise call fold check"));
         assert!(output.contains("postflop by dealt players:"));
         assert!(output.contains("all 6 "));
         assert!(!output.contains("=== hand"));
