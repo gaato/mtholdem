@@ -565,8 +565,12 @@ fn blind_defense_discount(context: &BotDecisionContext) -> f32 {
 
 fn three_bet_threshold(profile: BotProfile, context: &BotDecisionContext) -> f32 {
     let depth_penalty = f32::from(context.street_raise_count.unwrap_or(1).saturating_sub(1)) * 0.07;
-    (0.88 - profile.aggression * 0.08 + depth_penalty + raise_size_pressure(context))
-        .clamp(0.72, 0.99)
+    let short_handed_discount = short_handed_openness(dealt_player_count(context)) * 0.04;
+    let blind_discount = (blind_defense_discount(context) * 0.40).min(0.04);
+    (0.84 - profile.aggression * 0.10 - short_handed_discount - blind_discount
+        + depth_penalty
+        + raise_size_pressure(context))
+    .clamp(0.68, 0.99)
 }
 
 fn raise_size_pressure(context: &BotDecisionContext) -> f32 {
@@ -1590,6 +1594,21 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
 
         assert_eq!(bot.choose_action(&context, &mut rng), BetAction::Call);
+    }
+
+    #[test]
+    fn balanced_bot_three_bets_jacks_against_open() {
+        let bot = HeuristicBot::from_preset(BotPreset::Balanced);
+        let context = full_ring_cold_call_facing_open_context().with_hole_cards(Some([
+            Card::new(Rank::Jack, mtholdem::Suit::Spades),
+            Card::new(Rank::Jack, mtholdem::Suit::Diamonds),
+        ]));
+        let mut rng = StdRng::seed_from_u64(1);
+
+        assert!(matches!(
+            bot.choose_action(&context, &mut rng),
+            BetAction::RaiseTo(_)
+        ));
     }
 
     #[test]
