@@ -1,7 +1,12 @@
 # ADR-016: Build Bot as Range-Aware Monte Carlo Heuristic
 
 ## Status
-Accepted
+Partially superseded by ADR-018
+
+ADR-018 supersedes the diagnostic and public API framing around
+`HandAssessment`, assessment, intent, and sizing. This ADR still governs the
+choice to use bounded range-aware Monte Carlo, public-information sampling, and
+aggregate telemetry rather than a solver.
 
 ## Date
 2026-06-26

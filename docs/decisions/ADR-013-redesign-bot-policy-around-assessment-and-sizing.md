@@ -1,7 +1,12 @@
 # ADR-013: Redesign Bot Policy Around Assessment and Sizing
 
 ## Status
-Accepted
+Superseded by ADR-018
+
+ADR-018 supersedes this ADR's assessment/intent/sizing vocabulary as the
+long-term bot decision model. This ADR remains historical context for rejecting
+the original min-raise heuristic and for requiring richer public action
+context.
 
 ## Date
 2026-06-25

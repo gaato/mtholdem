@@ -170,8 +170,11 @@ single-player shells may use it to answer `RequestAction` effects while keeping
 the peer/session loop in the host. See
 [ADR-010](decisions/ADR-010-keep-bot-policy-host-side.md) for the single-player
 and human-input boundary. The bot policy is pre-stable and now exposes
-assessment, intent, and sizing stages; its assessment includes bounded Monte
-Carlo equity over unknown cards and lightweight public range assumptions. See
+classic poker situation and motive vocabulary as the intended diagnostic model;
+bounded Monte Carlo equity, hand classes, draw material, pot odds, and pressure
+are evidence for motives rather than the public reason for an action. See
+[ADR-018](decisions/ADR-018-reframe-bot-policy-around-classic-poker-motives.md)
+and
 [ADR-013](decisions/ADR-013-redesign-bot-policy-around-assessment-and-sizing.md).
 Preset tuning should be validated with aggregate telemetry as described in
 [ADR-016](decisions/ADR-016-build-bot-as-range-aware-monte-carlo-heuristic.md).
