@@ -69,6 +69,53 @@
 //! mth_peer_session_free(session);
 //! ```
 //!
+//! Local table hosts that want a single-player or demo shell should prefer the
+//! `mth_table_*` entrypoints. They expose a polling table-session handle, a backend
+//! selector, local table events, and a human-action submission point without exposing
+//! the Rust-only bot decision context:
+//!
+//! ```c
+//! MthTableConfig config = {
+//!     MTH_TABLE_BACKEND_RULES_ONLY,
+//!     6,
+//!     true,
+//!     0,
+//!     MTH_BOT_PRESET_BALANCED,
+//!     1,
+//!     2,
+//!     100,
+//!     false,
+//!     0,
+//!     7,
+//! };
+//! MthTableSession *table = NULL;
+//! int rc = mth_table_session_new(config, &table);
+//! if (rc != 0) {
+//!     /* Read mth_last_error_message because no table handle exists. */
+//!     return rc;
+//! }
+//! rc = mth_table_start_next_hand(table);
+//! while (rc == 0) {
+//!     MthTableEvent event;
+//!     rc = mth_table_next_event(table, &event);
+//!     if (rc == MTH_ERROR_NO_EFFECT) {
+//!         break;
+//!     }
+//!     if (rc != 0) {
+//!         break;
+//!     }
+//!     if (event.kind == MTH_TABLE_EVENT_ACTION_REQUEST) {
+//!         /* Submit one legal action with mth_table_submit_action. */
+//!     }
+//!     mth_table_event_free(event);
+//! }
+//! mth_table_session_free(table);
+//! ```
+//!
+//! The table ABI currently implements `MTH_TABLE_BACKEND_RULES_ONLY`. Asking for
+//! `MTH_TABLE_BACKEND_PEER` returns a configuration error rather than silently
+//! falling back, because peer-backed local tables need their own event extraction.
+//!
 //! # Ownership and allocation
 //!
 //! `MthPeerSession` pointers, [`MthBuffer`] values, and [`MthEffect`] values are
@@ -102,16 +149,26 @@ use std::slice;
 
 use mental_card_core::error::Error;
 use mental_card_core::identity::{IDENTITY_PUBLIC_KEY_BYTES, IdentityPublic, IdentitySecret};
+use mtholdem::betting::{BetAction, LegalActions, Street};
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
-use mtholdem::{Chips, HandNumber, Seat, SessionId};
+use mtholdem::holdem::{HandProgress, HoldemHand};
+use mtholdem::types::{MAX_PLAYERS, MIN_PLAYERS};
+use mtholdem::{Card, Chips, HandNumber, Rank, Seat, SessionId, Suit};
 use mtholdem_adapter::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, BoundaryAction, BoundaryActionKind,
     BoundaryEffect, BoundaryEffectKind, BoundaryErrorCode, BoundaryPeerPhase,
     decode_certified_checkpoint, decode_showdown_bundle, encode_checkpoint_state, encode_effects,
     encode_recovery_bundle,
 };
+use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
 use mtholdem_peer::PeerSession;
-use rand::rngs::OsRng;
+use mtholdem_table::{
+    ActionRequest, ActionTaken, BoardOpened, HandFinished, HandStarted, HoleCards, SessionFinished,
+    Showdown, TableBackend, TableEvent as RustTableEvent, TableShowdown,
+};
+use rand::SeedableRng;
+use rand::rngs::{OsRng, StdRng};
+use rand::seq::SliceRandom;
 
 thread_local! {
     static LAST_ERROR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -190,6 +247,39 @@ pub const MTH_PHASE_SHOWDOWN: u32 = BoundaryPeerPhase::Showdown as u32;
 /// The hand is complete.
 pub const MTH_PHASE_COMPLETE: u32 = BoundaryPeerPhase::Complete as u32;
 
+/// Peer-backed local table execution.
+pub const MTH_TABLE_BACKEND_PEER: u32 = 1;
+/// Lightweight rules-only local table execution.
+pub const MTH_TABLE_BACKEND_RULES_ONLY: u32 = 2;
+
+/// A hand started.
+pub const MTH_TABLE_EVENT_HAND_STARTED: u32 = 1;
+/// Local-visible hole cards are available.
+pub const MTH_TABLE_EVENT_HOLE_CARDS: u32 = 2;
+/// A human-controlled seat must choose an action.
+pub const MTH_TABLE_EVENT_ACTION_REQUEST: u32 = 3;
+/// A seat took a public betting action.
+pub const MTH_TABLE_EVENT_ACTION_TAKEN: u32 = 4;
+/// A public board street opened.
+pub const MTH_TABLE_EVENT_BOARD_OPENED: u32 = 5;
+/// One or more hands opened at showdown.
+pub const MTH_TABLE_EVENT_SHOWDOWN: u32 = 6;
+/// A hand finished.
+pub const MTH_TABLE_EVENT_HAND_FINISHED: u32 = 7;
+/// The local table session finished.
+pub const MTH_TABLE_EVENT_SESSION_FINISHED: u32 = 8;
+
+/// Nit bot preset.
+pub const MTH_BOT_PRESET_NIT: u32 = 1;
+/// Balanced bot preset.
+pub const MTH_BOT_PRESET_BALANCED: u32 = 2;
+/// Loose-passive bot preset.
+pub const MTH_BOT_PRESET_LOOSE_PASSIVE: u32 = 3;
+/// Loose-aggressive bot preset.
+pub const MTH_BOT_PRESET_LAG: u32 = 4;
+/// Maniac bot preset.
+pub const MTH_BOT_PRESET_MANIAC: u32 = 5;
+
 /// Opaque peer-session handle owned by the C ABI.
 ///
 /// The handle keeps Rust-only state behind a stable pointer: the typed peer session,
@@ -199,6 +289,45 @@ pub struct MthPeerSession {
     rng: OsRng,
     pending_effects: VecDeque<BoundaryEffect>,
     last_error: Vec<u8>,
+}
+
+/// Opaque local table-session handle owned by the C ABI.
+///
+/// The first implementation supports the explicit rules-only backend. Peer-backed
+/// table sessions remain a separate extraction step and are rejected instead of
+/// silently falling back.
+pub struct MthTableSession {
+    config: TableConfig,
+    stacks: Vec<Chips>,
+    button: Seat,
+    completed_hands: u64,
+    active_hand: Option<RulesOnlyHand>,
+    pending_events: VecDeque<RustTableEvent>,
+    awaiting_action: Option<ActionRequest>,
+    bot: HeuristicBot,
+    rng: StdRng,
+    last_error: Vec<u8>,
+    session_finished: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TableConfig {
+    backend: TableBackend,
+    player_count: usize,
+    human: Option<Seat>,
+    preset: BotPreset,
+    starting_stack: Chips,
+    small_blind: Chips,
+    big_blind: Chips,
+    hand_limit: Option<u64>,
+}
+
+#[derive(Debug)]
+struct RulesOnlyHand {
+    hand_number: HandNumber,
+    hand: HoldemHand,
+    deck: Vec<Card>,
+    hole_cards: Vec<Option<[Card; 2]>>,
 }
 
 /// Immutable session configuration supplied to `mth_peer_session_new`.
@@ -228,6 +357,34 @@ pub struct MthSessionConfig {
     pub security_deposit_units: u64,
     /// Application-enforced response timeout in milliseconds.
     pub timeout_millis: u64,
+}
+
+/// Configuration for a local table session.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MthTableConfig {
+    /// One of the `MTH_TABLE_BACKEND_*` constants.
+    pub backend: u32,
+    /// Number of seats at the table.
+    pub player_count: usize,
+    /// Whether `human_seat` is used.
+    pub has_human_seat: bool,
+    /// Human-controlled seat for action-request events.
+    pub human_seat: u8,
+    /// One of the `MTH_BOT_PRESET_*` constants.
+    pub bot_preset: u32,
+    /// Small blind in smallest chip units.
+    pub small_blind_units: u64,
+    /// Big blind in smallest chip units.
+    pub big_blind_units: u64,
+    /// Initial stack in smallest chip units.
+    pub starting_stack_units: u64,
+    /// Whether `hand_limit` is used.
+    pub has_hand_limit: bool,
+    /// Maximum number of hands to run when `has_hand_limit` is true.
+    pub hand_limit: u64,
+    /// Deterministic local RNG seed for rules-only local play.
+    pub seed: u64,
 }
 
 /// Owned byte buffer returned across the C ABI.
@@ -338,6 +495,121 @@ pub struct MthEffect {
     pub finished_hand: u64,
 }
 
+/// One local table event returned across the C ABI.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MthTableEvent {
+    /// One of the `MTH_TABLE_EVENT_*` constants.
+    pub kind: u32,
+    /// One of the `MTH_TABLE_BACKEND_*` constants.
+    pub backend: u32,
+    /// Current hand number.
+    pub hand: u64,
+    /// Whether `button_seat` is meaningful.
+    pub has_button: bool,
+    /// Dealer button seat.
+    pub button_seat: u8,
+    /// Whether `actor` is meaningful.
+    pub has_actor: bool,
+    /// Acting or reported seat.
+    pub actor: u8,
+    /// Current street as `mtholdem::betting::Street` discriminant.
+    pub street: u32,
+    /// Whether legal-action fields are meaningful.
+    pub has_legal_actions: bool,
+    /// Amount required to call.
+    pub to_call_units: u64,
+    /// Whether `minimum_raise_to_units` is meaningful.
+    pub has_minimum_raise_to: bool,
+    /// Minimum full raise target.
+    pub minimum_raise_to_units: u64,
+    /// Maximum raise target.
+    pub maximum_raise_to_units: u64,
+    /// Whether a full raise is reopened.
+    pub raise_reopened: bool,
+    /// Whether checking is legal.
+    pub can_check: bool,
+    /// Whether public action-context fields are meaningful.
+    pub has_action_context: bool,
+    /// Current pot before the actor chooses.
+    pub pot_units: u64,
+    /// Actor stack before choosing.
+    pub actor_stack_units: u64,
+    /// Actor street contribution before choosing.
+    pub actor_street_contributed_units: u64,
+    /// Whether `effective_stack_units` is meaningful.
+    pub has_effective_stack: bool,
+    /// Smallest live opponent stack.
+    pub effective_stack_units: u64,
+    /// Live opponent count.
+    pub live_opponents: u8,
+    /// Matched-bet opponent count.
+    pub matched_bet_opponents: u8,
+    /// Big blind.
+    pub big_blind_units: u64,
+    /// Current highest street contribution.
+    pub current_bet_units: u64,
+    /// Whether action fields are meaningful.
+    pub has_action: bool,
+    /// One of the `MTH_ACTION_*` constants.
+    pub action_kind: u32,
+    /// Raise-to amount for raise actions.
+    pub raise_to_units: u64,
+    /// Board cards as card indices.
+    pub board_cards: MthBuffer,
+    /// Visible hole cards as two card indices.
+    pub hole_cards: MthBuffer,
+    /// Starting stacks as little-endian `u64` units.
+    pub starting_stacks: MthBuffer,
+    /// Final stacks as little-endian `u64` units.
+    pub final_stacks: MthBuffer,
+    /// Showdown rows: seat, first card, second card, category.
+    pub showdown_rows: MthBuffer,
+    /// Completed hand count for session-finished events.
+    pub completed_hands: u64,
+}
+
+impl MthTableEvent {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            backend: 0,
+            hand: 0,
+            has_button: false,
+            button_seat: 0,
+            has_actor: false,
+            actor: 0,
+            street: 0,
+            has_legal_actions: false,
+            to_call_units: 0,
+            has_minimum_raise_to: false,
+            minimum_raise_to_units: 0,
+            maximum_raise_to_units: 0,
+            raise_reopened: false,
+            can_check: false,
+            has_action_context: false,
+            pot_units: 0,
+            actor_stack_units: 0,
+            actor_street_contributed_units: 0,
+            has_effective_stack: false,
+            effective_stack_units: 0,
+            live_opponents: 0,
+            matched_bet_opponents: 0,
+            big_blind_units: 0,
+            current_bet_units: 0,
+            has_action: false,
+            action_kind: 0,
+            raise_to_units: 0,
+            board_cards: MthBuffer::empty(),
+            hole_cards: MthBuffer::empty(),
+            starting_stacks: MthBuffer::empty(),
+            final_stacks: MthBuffer::empty(),
+            showdown_rows: MthBuffer::empty(),
+            completed_hands: 0,
+        }
+    }
+}
+
 impl MthEffect {
     const fn empty() -> Self {
         Self {
@@ -430,6 +702,114 @@ impl From<BoundaryEffect> for MthEffect {
     }
 }
 
+impl From<RustTableEvent> for MthTableEvent {
+    fn from(value: RustTableEvent) -> Self {
+        let mut event = Self::empty();
+        match value {
+            RustTableEvent::HandStarted(started) => {
+                event.kind = MTH_TABLE_EVENT_HAND_STARTED;
+                event.backend = table_backend_code(started.backend);
+                event.hand = started.hand.to_u64();
+                event.has_button = true;
+                event.button_seat = started.button.to_u8();
+                event.starting_stacks =
+                    MthBuffer::from_vec(encode_chips_slice(&started.starting_stacks));
+            }
+            RustTableEvent::HoleCards(hole) => {
+                event.kind = MTH_TABLE_EVENT_HOLE_CARDS;
+                event.backend = table_backend_code(hole.backend);
+                event.hand = hole.hand.to_u64();
+                event.has_actor = true;
+                event.actor = hole.seat.to_u8();
+                event.hole_cards = MthBuffer::from_vec(encode_cards(&hole.cards));
+            }
+            RustTableEvent::ActionRequest(request) => {
+                event.kind = MTH_TABLE_EVENT_ACTION_REQUEST;
+                event.backend = table_backend_code(request.backend);
+                event.hand = request.hand.to_u64();
+                event.has_actor = true;
+                event.actor = request.actor.to_u8();
+                event.street = street_code(request.street);
+                fill_legal_actions(&mut event, request.legal_actions);
+                fill_action_context(&mut event, request.action_context);
+            }
+            RustTableEvent::ActionTaken(taken) => {
+                event.kind = MTH_TABLE_EVENT_ACTION_TAKEN;
+                event.backend = table_backend_code(taken.backend);
+                event.hand = taken.hand.to_u64();
+                event.has_actor = true;
+                event.actor = taken.actor.to_u8();
+                event.street = street_code(taken.street);
+                fill_legal_actions(&mut event, taken.legal_actions);
+                fill_action(&mut event, taken.action);
+            }
+            RustTableEvent::BoardOpened(board) => {
+                event.kind = MTH_TABLE_EVENT_BOARD_OPENED;
+                event.backend = table_backend_code(board.backend);
+                event.hand = board.hand.to_u64();
+                event.street = street_code(board.street);
+                event.board_cards = MthBuffer::from_vec(encode_cards(&board.board));
+            }
+            RustTableEvent::Showdown(showdown) => {
+                event.kind = MTH_TABLE_EVENT_SHOWDOWN;
+                event.backend = table_backend_code(showdown.backend);
+                event.hand = showdown.hand.to_u64();
+                event.showdown_rows = MthBuffer::from_vec(encode_showdown_rows(&showdown.showdown));
+            }
+            RustTableEvent::HandFinished(finished) => {
+                event.kind = MTH_TABLE_EVENT_HAND_FINISHED;
+                event.backend = table_backend_code(finished.backend);
+                event.hand = finished.hand.to_u64();
+                event.final_stacks =
+                    MthBuffer::from_vec(encode_chips_slice(&finished.final_stacks));
+            }
+            RustTableEvent::SessionFinished(finished) => {
+                event.kind = MTH_TABLE_EVENT_SESSION_FINISHED;
+                event.completed_hands = finished.completed_hands;
+                event.final_stacks =
+                    MthBuffer::from_vec(encode_chips_slice(&finished.final_stacks));
+            }
+        }
+        event
+    }
+}
+
+fn fill_legal_actions(event: &mut MthTableEvent, legal: LegalActions) {
+    event.has_legal_actions = true;
+    event.to_call_units = legal.to_call().units();
+    if let Some(minimum) = legal.minimum_raise_to() {
+        event.has_minimum_raise_to = true;
+        event.minimum_raise_to_units = minimum.units();
+    }
+    event.maximum_raise_to_units = legal.maximum_raise_to().units();
+    event.raise_reopened = legal.raise_reopened();
+    event.can_check = legal.can_check();
+}
+
+fn fill_action_context(event: &mut MthTableEvent, context: mtholdem::betting::ActionContext) {
+    event.has_action_context = true;
+    event.has_button = true;
+    event.button_seat = context.button().to_u8();
+    event.pot_units = context.pot().units();
+    event.actor_stack_units = context.actor_stack().units();
+    event.actor_street_contributed_units = context.actor_street_contributed().units();
+    if let Some(effective) = context.effective_stack() {
+        event.has_effective_stack = true;
+        event.effective_stack_units = effective.units();
+    }
+    event.live_opponents = u8::try_from(context.live_opponents()).unwrap_or(u8::MAX);
+    event.matched_bet_opponents = u8::try_from(context.matched_bet_opponents()).unwrap_or(u8::MAX);
+    event.big_blind_units = context.big_blind().units();
+    event.current_bet_units = context.current_bet().units();
+}
+
+fn fill_action(event: &mut MthTableEvent, action: BetAction) {
+    event.has_action = true;
+    let boundary = BoundaryAction::from(action);
+    event.action_kind = boundary_action_kind_code(boundary.kind());
+    event.raise_to_units = boundary.raise_to_units();
+}
+
 /// Read-only peer status returned across the C ABI.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -460,10 +840,14 @@ pub struct MthAbiLayout {
     pub version_patch: u32,
     /// `sizeof(MthSessionConfig)` for the compiled Rust library.
     pub session_config_size: usize,
+    /// `sizeof(MthTableConfig)` for the compiled Rust library.
+    pub table_config_size: usize,
     /// `sizeof(MthBuffer)` for the compiled Rust library.
     pub buffer_size: usize,
     /// `sizeof(MthEffect)` for the compiled Rust library.
     pub effect_size: usize,
+    /// `sizeof(MthTableEvent)` for the compiled Rust library.
+    pub table_event_size: usize,
     /// `sizeof(MthPeerStatus)` for the compiled Rust library.
     pub peer_status_size: usize,
     /// `sizeof(MthAbiLayout)` for the compiled Rust library.
@@ -477,8 +861,10 @@ impl MthAbiLayout {
             version_minor: ABI_VERSION_MINOR,
             version_patch: ABI_VERSION_PATCH,
             session_config_size: size_of::<MthSessionConfig>(),
+            table_config_size: size_of::<MthTableConfig>(),
             buffer_size: size_of::<MthBuffer>(),
             effect_size: size_of::<MthEffect>(),
+            table_event_size: size_of::<MthTableEvent>(),
             peer_status_size: size_of::<MthPeerStatus>(),
             abi_layout_size: size_of::<MthAbiLayout>(),
         }
@@ -528,8 +914,10 @@ pub const extern "C" fn mth_abi_check_layout(layout: MthAbiLayout) -> i32 {
         || layout.version_minor != current.version_minor
         || layout.version_patch != current.version_patch
         || layout.session_config_size != current.session_config_size
+        || layout.table_config_size != current.table_config_size
         || layout.buffer_size != current.buffer_size
         || layout.effect_size != current.effect_size
+        || layout.table_event_size != current.table_event_size
         || layout.peer_status_size != current.peer_status_size
         || layout.abi_layout_size != current.abi_layout_size
     {
@@ -572,6 +960,157 @@ pub unsafe extern "C" fn mth_effect_free(effect: MthEffect) {
         mth_buffer_free(effect.checkpoint);
         mth_buffer_free(effect.final_stacks);
     }
+}
+
+/// Frees owned buffers inside a table event returned by this library.
+///
+/// # Safety
+///
+/// `event` must be a live event value returned by this library, and it must not
+/// have been freed before. Callers must preserve embedded buffer fields exactly.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_event_free(event: MthTableEvent) {
+    // SAFETY: The caller's contract for this event covers every embedded buffer.
+    unsafe {
+        mth_buffer_free(event.board_cards);
+        mth_buffer_free(event.hole_cards);
+        mth_buffer_free(event.starting_stacks);
+        mth_buffer_free(event.final_stacks);
+        mth_buffer_free(event.showdown_rows);
+    }
+}
+
+/// Creates a local table-session handle.
+///
+/// # Safety
+///
+/// `out_handle` must be writable for one pointer value when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_session_new(
+    config: MthTableConfig,
+    out_handle: *mut *mut MthTableSession,
+) -> i32 {
+    if out_handle.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    // SAFETY: `out_handle` was checked for null and receives null or an owned box pointer.
+    unsafe {
+        *out_handle = ptr::null_mut();
+    }
+    let Ok(result) = catch_unwind(AssertUnwindSafe(|| build_table_session(config))) else {
+        return store_global_panic();
+    };
+    match result {
+        Ok(handle) => {
+            clear_global_error();
+            // SAFETY: `out_handle` was checked above and receives ownership of the boxed handle.
+            unsafe {
+                *out_handle = Box::into_raw(Box::new(handle));
+            }
+            code(BoundaryErrorCode::Success)
+        }
+        Err(error) => store_global_error(&error),
+    }
+}
+
+/// Frees a table-session handle returned by `mth_table_session_new`.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by [`mth_table_session_new`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_session_free(handle: *mut MthTableSession) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: The pointer must have been returned by `mth_table_session_new` and not freed yet.
+    unsafe {
+        drop(Box::from_raw(handle));
+    }
+}
+
+/// Starts the next local hand and queues table events until a human action is needed.
+///
+/// # Safety
+///
+/// `handle` must be null or a live table-session pointer returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_start_next_hand(handle: *mut MthTableSession) -> i32 {
+    with_table_handle(handle, MthTableSession::start_next_hand)
+}
+
+/// Submits a human action for the current table action request.
+///
+/// # Safety
+///
+/// `handle` must be null or a live table-session pointer returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_submit_action(
+    handle: *mut MthTableSession,
+    action_kind: u32,
+    raise_to_units: u64,
+) -> i32 {
+    let Some(kind) = action_kind_from_code(action_kind) else {
+        return code(BoundaryErrorCode::InvalidArgument);
+    };
+    with_table_handle(handle, |handle| {
+        handle.submit_action(BoundaryAction::new(kind, raise_to_units).to_bet_action())
+    })
+}
+
+/// Pops the next queued local table event.
+///
+/// `NoEffect` means the queue is empty and is not a protocol failure.
+///
+/// # Safety
+///
+/// `handle` must be null or a live table-session pointer returned by this library.
+/// `out_event` must be writable for one [`MthTableEvent`] value when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_next_event(
+    handle: *mut MthTableSession,
+    out_event: *mut MthTableEvent,
+) -> i32 {
+    if out_event.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    let Some(handle) = checked_table_handle(handle) else {
+        return code(BoundaryErrorCode::NullPointer);
+    };
+    match catch_unwind(AssertUnwindSafe(|| {
+        let Some(event) = handle.pending_events.pop_front() else {
+            return code(BoundaryErrorCode::NoEffect);
+        };
+        // SAFETY: `out_event` was checked for null and receives a plain C-compatible value.
+        unsafe {
+            *out_event = MthTableEvent::from(event);
+        }
+        handle.last_error.clear();
+        clear_global_error();
+        code(BoundaryErrorCode::Success)
+    })) {
+        Ok(status) => status,
+        Err(_) => store_table_panic(handle),
+    }
+}
+
+/// Copies the last error message for this table handle into a caller-owned buffer.
+///
+/// # Safety
+///
+/// `handle` must be null or a live table-session pointer returned by this library.
+/// `out_required_len` must be writable for one `usize` when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_table_session_last_error(
+    handle: *mut MthTableSession,
+    out_ptr: *mut u8,
+    out_len: usize,
+    out_required_len: *mut usize,
+) -> i32 {
+    let Some(handle) = checked_table_handle(handle) else {
+        return code(BoundaryErrorCode::NullPointer);
+    };
+    copy_error_message(&handle.last_error, out_ptr, out_len, out_required_len)
 }
 
 /// Creates a peer-session handle.
@@ -1001,6 +1540,425 @@ fn build_session(
     })
 }
 
+fn build_table_session(config: MthTableConfig) -> Result<MthTableSession, Error> {
+    let backend = table_backend_from_code(config.backend)?;
+    if backend != TableBackend::RulesOnly {
+        return Err(mental_card_core::error::configuration(
+            "mth_table peer backend is not implemented yet",
+        ));
+    }
+    if !(MIN_PLAYERS..=MAX_PLAYERS).contains(&config.player_count) {
+        return Err(mental_card_core::error::configuration(format!(
+            "table player count must be {MIN_PLAYERS}..={MAX_PLAYERS}"
+        )));
+    }
+    let small_blind = Chips::from_units(config.small_blind_units);
+    let big_blind = Chips::from_units(config.big_blind_units);
+    let starting_stack = Chips::from_units(config.starting_stack_units);
+    if small_blind.is_zero() || big_blind <= small_blind {
+        return Err(mental_card_core::error::configuration(
+            "blinds must satisfy 0 < small blind < big blind",
+        ));
+    }
+    if starting_stack < big_blind {
+        return Err(mental_card_core::error::configuration(
+            "starting stack must cover the big blind",
+        ));
+    }
+    let human = if config.has_human_seat {
+        let seat = Seat::from_u8(config.human_seat)?;
+        if seat.index() >= config.player_count {
+            return Err(mental_card_core::error::configuration(
+                "human seat is outside the table",
+            ));
+        }
+        Some(seat)
+    } else {
+        None
+    };
+    let hand_limit = if config.has_hand_limit {
+        Some(config.hand_limit)
+    } else {
+        None
+    };
+    let table_config = TableConfig {
+        backend,
+        player_count: config.player_count,
+        human,
+        preset: bot_preset_from_code(config.bot_preset)?,
+        starting_stack,
+        small_blind,
+        big_blind,
+        hand_limit,
+    };
+    Ok(MthTableSession {
+        config: table_config,
+        stacks: vec![starting_stack; config.player_count],
+        button: Seat::new(0)?,
+        completed_hands: 0,
+        active_hand: None,
+        pending_events: VecDeque::new(),
+        awaiting_action: None,
+        bot: HeuristicBot::from_preset(table_config.preset),
+        rng: StdRng::seed_from_u64(config.seed),
+        last_error: Vec::new(),
+        session_finished: false,
+    })
+}
+
+impl MthTableSession {
+    fn start_next_hand(&mut self) -> Result<(), Error> {
+        if self.active_hand.is_some() || self.awaiting_action.is_some() {
+            return Err(mental_card_core::error::protocol(
+                "table hand is already active",
+            ));
+        }
+        if self.session_should_finish() {
+            self.enqueue_session_finished();
+            return Ok(());
+        }
+        let hand_number = HandNumber::from_u64(self.completed_hands);
+        let mut deck = shuffled_deck(&mut self.rng);
+        let mut hole_cards = vec![None; self.config.player_count];
+        for seat in active_seats_in_deal_order(self.button, &self.stacks) {
+            let first = draw_card(&mut deck)?;
+            let second = draw_card(&mut deck)?;
+            hole_cards[seat.index()] = Some([first, second]);
+        }
+        let hand = HoldemHand::new(
+            &self.stacks,
+            self.button,
+            self.config.small_blind,
+            self.config.big_blind,
+            self.config.starting_stack,
+        )?;
+        self.pending_events
+            .push_back(RustTableEvent::HandStarted(HandStarted {
+                hand: hand_number,
+                backend: self.config.backend,
+                button: self.button,
+                starting_stacks: self.stacks.clone(),
+            }));
+        if let Some(human) = self.config.human {
+            if let Some(cards) = hole_cards[human.index()] {
+                self.pending_events
+                    .push_back(RustTableEvent::HoleCards(HoleCards {
+                        hand: hand_number,
+                        backend: self.config.backend,
+                        seat: human,
+                        cards,
+                    }));
+            }
+        }
+        self.active_hand = Some(RulesOnlyHand {
+            hand_number,
+            hand,
+            deck,
+            hole_cards,
+        });
+        self.progress_until_blocked()
+    }
+
+    fn submit_action(&mut self, action: BetAction) -> Result<(), Error> {
+        let request = self
+            .awaiting_action
+            .take()
+            .ok_or_else(|| mental_card_core::error::protocol("no table action is pending"))?;
+        let Some(active) = self.active_hand.as_mut() else {
+            return Err(mental_card_core::error::protocol(
+                "table action has no active hand",
+            ));
+        };
+        let actor = active
+            .hand
+            .next_to_act()
+            .ok_or_else(|| mental_card_core::error::protocol("table action has no active actor"))?;
+        if actor != request.actor {
+            return Err(mental_card_core::error::protocol(
+                "table action actor changed before submission",
+            ));
+        }
+        active.hand.apply_action(actor, action)?;
+        self.pending_events
+            .push_back(RustTableEvent::ActionTaken(ActionTaken {
+                hand: active.hand_number,
+                backend: self.config.backend,
+                actor,
+                street: request.street,
+                action,
+                legal_actions: request.legal_actions,
+            }));
+        self.progress_until_blocked()
+    }
+
+    fn progress_until_blocked(&mut self) -> Result<(), Error> {
+        loop {
+            let progress = self
+                .active_hand
+                .as_ref()
+                .map(|active| active.hand.progress())
+                .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))?;
+            match progress {
+                HandProgress::Betting(street) => {
+                    let request = self.current_action_request(street)?;
+                    if self.config.human == Some(request.actor) {
+                        self.awaiting_action = Some(request);
+                        self.pending_events
+                            .push_back(RustTableEvent::ActionRequest(request));
+                        return Ok(());
+                    }
+                    self.apply_bot_action(request)?;
+                }
+                HandProgress::AwaitingFlop => {
+                    let (hand, board) = {
+                        let active = self.active_hand_mut()?;
+                        let flop = [
+                            draw_card(&mut active.deck)?,
+                            draw_card(&mut active.deck)?,
+                            draw_card(&mut active.deck)?,
+                        ];
+                        active.hand.open_flop(flop)?;
+                        (active.hand_number, active.hand.board().to_vec())
+                    };
+                    self.pending_events
+                        .push_back(RustTableEvent::BoardOpened(BoardOpened {
+                            hand,
+                            backend: self.config.backend,
+                            street: Street::Flop,
+                            board,
+                        }));
+                }
+                HandProgress::AwaitingTurn => {
+                    let (hand, board) = {
+                        let active = self.active_hand_mut()?;
+                        active.hand.open_turn(draw_card(&mut active.deck)?)?;
+                        (active.hand_number, active.hand.board().to_vec())
+                    };
+                    self.pending_events
+                        .push_back(RustTableEvent::BoardOpened(BoardOpened {
+                            hand,
+                            backend: self.config.backend,
+                            street: Street::Turn,
+                            board,
+                        }));
+                }
+                HandProgress::AwaitingRiver => {
+                    let (hand, board) = {
+                        let active = self.active_hand_mut()?;
+                        active.hand.open_river(draw_card(&mut active.deck)?)?;
+                        (active.hand_number, active.hand.board().to_vec())
+                    };
+                    self.pending_events
+                        .push_back(RustTableEvent::BoardOpened(BoardOpened {
+                            hand,
+                            backend: self.config.backend,
+                            street: Street::River,
+                            board,
+                        }));
+                }
+                HandProgress::Showdown => self.finish_showdown()?,
+                HandProgress::Uncontested(_) => self.finish_uncontested()?,
+                HandProgress::Complete => self.finish_complete()?,
+                _ => {
+                    return Err(mental_card_core::error::protocol(
+                        "rules-only backend does not support this hand phase",
+                    ));
+                }
+            }
+            if self.active_hand.is_none() {
+                if self.session_should_finish() {
+                    self.enqueue_session_finished();
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    fn current_action_request(&self, street: Street) -> Result<ActionRequest, Error> {
+        let active = self
+            .active_hand
+            .as_ref()
+            .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))?;
+        let actor = active
+            .hand
+            .next_to_act()
+            .ok_or_else(|| mental_card_core::error::protocol("rules-only hand has no actor"))?;
+        Ok(ActionRequest {
+            hand: active.hand_number,
+            backend: self.config.backend,
+            actor,
+            street,
+            legal_actions: active.hand.legal_actions()?,
+            action_context: active.hand.action_context()?,
+        })
+    }
+
+    fn apply_bot_action(&mut self, request: ActionRequest) -> Result<(), Error> {
+        let active_player_count = self.active_player_count();
+        let player_count = self.config.player_count;
+        let (hole_cards, board) = {
+            let active = self
+                .active_hand
+                .as_ref()
+                .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))?;
+            (
+                active.hole_cards[request.actor.index()],
+                active.hand.board().to_vec(),
+            )
+        };
+        let context = BotDecisionContext::new(
+            player_count,
+            request.actor,
+            request.street,
+            request.legal_actions,
+        )
+        .with_dealt_player_count(active_player_count)
+        .with_hole_cards(hole_cards)
+        .with_board(board)
+        .with_action_context(request.action_context)
+        .with_postflop_initiative(false);
+        let action = self.bot.decide(&context, &mut self.rng).action;
+        let active = self.active_hand_mut()?;
+        let hand_number = active.hand_number;
+        active.hand.apply_action(request.actor, action)?;
+        self.pending_events
+            .push_back(RustTableEvent::ActionTaken(ActionTaken {
+                hand: hand_number,
+                backend: self.config.backend,
+                actor: request.actor,
+                street: request.street,
+                action,
+                legal_actions: request.legal_actions,
+            }));
+        Ok(())
+    }
+
+    fn finish_showdown(&mut self) -> Result<(), Error> {
+        let mut active = self
+            .active_hand
+            .take()
+            .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))?;
+        let mut opened = Vec::new();
+        for seat in active.hand.ledger().live_seats() {
+            opened.push((seat, active.hole_cards[seat.index()]));
+        }
+        let final_stacks = active
+            .hand
+            .settle_showdown(&opened)?
+            .final_stacks()
+            .to_vec();
+        let showdown = TableShowdown::from_opened(
+            active.hand.board(),
+            opened
+                .into_iter()
+                .filter_map(|(seat, cards)| cards.map(|hole| (seat, hole))),
+        )?;
+        if !showdown.is_empty() {
+            self.pending_events
+                .push_back(RustTableEvent::Showdown(Showdown {
+                    hand: active.hand_number,
+                    backend: self.config.backend,
+                    showdown,
+                }));
+        }
+        self.finish_hand(active.hand_number, final_stacks);
+        Ok(())
+    }
+
+    fn finish_uncontested(&mut self) -> Result<(), Error> {
+        let mut active = self
+            .active_hand
+            .take()
+            .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))?;
+        let final_stacks = active.hand.settle_uncontested()?.final_stacks().to_vec();
+        self.finish_hand(active.hand_number, final_stacks);
+        Ok(())
+    }
+
+    fn finish_complete(&mut self) -> Result<(), Error> {
+        let active = self
+            .active_hand
+            .take()
+            .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))?;
+        let final_stacks = active
+            .hand
+            .result()
+            .ok_or_else(|| mental_card_core::error::protocol("rules-only result missing"))?
+            .final_stacks()
+            .to_vec();
+        self.finish_hand(active.hand_number, final_stacks);
+        Ok(())
+    }
+
+    fn finish_hand(&mut self, hand: HandNumber, final_stacks: Vec<Chips>) {
+        self.pending_events
+            .push_back(RustTableEvent::HandFinished(HandFinished {
+                hand,
+                backend: self.config.backend,
+                final_stacks: final_stacks.clone(),
+            }));
+        self.stacks = final_stacks;
+        self.completed_hands = self.completed_hands.saturating_add(1);
+        self.button = next_button(self.button, &self.stacks);
+    }
+
+    fn active_hand_mut(&mut self) -> Result<&mut RulesOnlyHand, Error> {
+        self.active_hand
+            .as_mut()
+            .ok_or_else(|| mental_card_core::error::protocol("no active table hand"))
+    }
+
+    fn active_player_count(&self) -> usize {
+        self.stacks.iter().filter(|stack| !stack.is_zero()).count()
+    }
+
+    fn session_should_finish(&self) -> bool {
+        self.active_player_count() < 2
+            || self
+                .config
+                .hand_limit
+                .is_some_and(|limit| self.completed_hands >= limit)
+    }
+
+    fn enqueue_session_finished(&mut self) {
+        if self.session_finished {
+            return;
+        }
+        self.session_finished = true;
+        self.pending_events
+            .push_back(RustTableEvent::SessionFinished(SessionFinished {
+                completed_hands: self.completed_hands,
+                final_stacks: self.stacks.clone(),
+            }));
+    }
+}
+
+fn with_table_handle(
+    handle: *mut MthTableSession,
+    operation: impl FnOnce(&mut MthTableSession) -> Result<(), Error>,
+) -> i32 {
+    let Some(handle) = checked_table_handle(handle) else {
+        return code(BoundaryErrorCode::NullPointer);
+    };
+    match catch_unwind(AssertUnwindSafe(|| operation(handle))) {
+        Err(_) => store_table_panic(handle),
+        Ok(Ok(())) => {
+            handle.last_error.clear();
+            clear_global_error();
+            code(BoundaryErrorCode::Success)
+        }
+        Ok(Err(error)) => store_table_error(handle, &error),
+    }
+}
+
+fn checked_table_handle<'a>(handle: *mut MthTableSession) -> Option<&'a mut MthTableSession> {
+    if handle.is_null() {
+        return None;
+    }
+    // SAFETY: The caller promises `handle` is a live pointer returned by this library.
+    Some(unsafe { &mut *handle })
+}
+
 fn with_handle(
     handle: *mut MthPeerSession,
     operation: impl FnOnce(&mut MthPeerSession) -> Result<(), Error>,
@@ -1107,7 +2065,93 @@ fn encode_u64_slice(values: &[u64]) -> Vec<u8> {
     bytes
 }
 
+fn encode_chips_slice(values: &[Chips]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * size_of::<u64>());
+    for value in values {
+        bytes.extend_from_slice(&value.units().to_le_bytes());
+    }
+    bytes
+}
+
+fn encode_cards(cards: &[Card]) -> Vec<u8> {
+    cards
+        .iter()
+        .map(|card| u8::try_from(card.to_index()).expect("card index fits u8"))
+        .collect()
+}
+
+fn encode_showdown_rows(showdown: &TableShowdown) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(showdown.hands().len() * 4);
+    for hand in showdown.hands() {
+        bytes.push(hand.seat.to_u8());
+        bytes.extend(encode_cards(&hand.hole_cards));
+        bytes.push(hand.category as u8);
+    }
+    bytes
+}
+
+fn shuffled_deck(rng: &mut StdRng) -> Vec<Card> {
+    let mut deck = Vec::with_capacity(52);
+    for suit in [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades] {
+        for rank in [
+            Rank::Two,
+            Rank::Three,
+            Rank::Four,
+            Rank::Five,
+            Rank::Six,
+            Rank::Seven,
+            Rank::Eight,
+            Rank::Nine,
+            Rank::Ten,
+            Rank::Jack,
+            Rank::Queen,
+            Rank::King,
+            Rank::Ace,
+        ] {
+            deck.push(Card::new(rank, suit));
+        }
+    }
+    deck.shuffle(rng);
+    deck
+}
+
+fn draw_card(deck: &mut Vec<Card>) -> Result<Card, Error> {
+    deck.pop()
+        .ok_or_else(|| mental_card_core::error::protocol("rules-only deck is empty"))
+}
+
+fn active_seats_in_deal_order(button: Seat, stacks: &[Chips]) -> Vec<Seat> {
+    (1..=stacks.len())
+        .map(|offset| (button.index() + offset) % stacks.len())
+        .filter(|index| !stacks[*index].is_zero())
+        .map(|index| Seat::new(index).expect("stack index fits in a seat"))
+        .collect()
+}
+
+fn next_button(current: Seat, stacks: &[Chips]) -> Seat {
+    for offset in 1..=stacks.len() {
+        let index = (current.index() + offset) % stacks.len();
+        if !stacks[index].is_zero() {
+            return Seat::new(index).expect("stack index fits in a seat");
+        }
+    }
+    current
+}
+
 fn store_error(handle: &mut MthPeerSession, error: &Error) -> i32 {
+    handle.last_error.clear();
+    handle
+        .last_error
+        .extend_from_slice(error.message().as_bytes());
+    LAST_ERROR.with(|cell| {
+        let mut last_error = cell.borrow_mut();
+        last_error.clear();
+        last_error.extend_from_slice(error.message().as_bytes());
+    });
+    code(error.into())
+}
+
+fn store_table_error(handle: &mut MthTableSession, error: &Error) -> i32 {
     handle.last_error.clear();
     handle
         .last_error
@@ -1130,6 +2174,19 @@ fn store_global_error(error: &Error) -> i32 {
 }
 
 fn store_panic(handle: &mut MthPeerSession) -> i32 {
+    handle.last_error.clear();
+    handle
+        .last_error
+        .extend_from_slice(PANIC_ERROR_MESSAGE.as_bytes());
+    LAST_ERROR.with(|cell| {
+        let mut last_error = cell.borrow_mut();
+        last_error.clear();
+        last_error.extend_from_slice(PANIC_ERROR_MESSAGE.as_bytes());
+    });
+    code(BoundaryErrorCode::Internal)
+}
+
+fn store_table_panic(handle: &mut MthTableSession) -> i32 {
     handle.last_error.clear();
     handle
         .last_error
@@ -1185,6 +2242,40 @@ fn copy_error_message(
     code(BoundaryErrorCode::Success)
 }
 
+fn table_backend_from_code(value: u32) -> Result<TableBackend, Error> {
+    match value {
+        MTH_TABLE_BACKEND_PEER => Ok(TableBackend::Peer),
+        MTH_TABLE_BACKEND_RULES_ONLY => Ok(TableBackend::RulesOnly),
+        _ => Err(mental_card_core::error::configuration(
+            "unknown table backend code",
+        )),
+    }
+}
+
+fn bot_preset_from_code(value: u32) -> Result<BotPreset, Error> {
+    match value {
+        MTH_BOT_PRESET_NIT => Ok(BotPreset::Nit),
+        MTH_BOT_PRESET_BALANCED => Ok(BotPreset::Balanced),
+        MTH_BOT_PRESET_LOOSE_PASSIVE => Ok(BotPreset::LoosePassive),
+        MTH_BOT_PRESET_LAG => Ok(BotPreset::Lag),
+        MTH_BOT_PRESET_MANIAC => Ok(BotPreset::Maniac),
+        _ => Err(mental_card_core::error::configuration(
+            "unknown bot preset code",
+        )),
+    }
+}
+
+const fn table_backend_code(value: TableBackend) -> u32 {
+    match value {
+        TableBackend::Peer => MTH_TABLE_BACKEND_PEER,
+        TableBackend::RulesOnly => MTH_TABLE_BACKEND_RULES_ONLY,
+    }
+}
+
+const fn street_code(value: Street) -> u32 {
+    value as u32
+}
+
 const fn code(value: BoundaryErrorCode) -> i32 {
     value as i32
 }
@@ -1200,7 +2291,6 @@ const fn action_kind_from_code(value: u32) -> Option<BoundaryActionKind> {
     }
 }
 
-#[cfg(test)]
 const fn boundary_action_kind_code(value: BoundaryActionKind) -> u32 {
     match value {
         BoundaryActionKind::Fold => 1,
@@ -1371,8 +2461,10 @@ mod tests {
             version_minor: 0,
             version_patch: 0,
             session_config_size: 0,
+            table_config_size: 0,
             buffer_size: 0,
             effect_size: 0,
+            table_event_size: 0,
             peer_status_size: 0,
             abi_layout_size: 0,
         };
@@ -1386,8 +2478,10 @@ mod tests {
         assert_eq!(layout.version_minor, ABI_VERSION_MINOR);
         assert_eq!(layout.version_patch, ABI_VERSION_PATCH);
         assert_eq!(layout.session_config_size, size_of::<MthSessionConfig>());
+        assert_eq!(layout.table_config_size, size_of::<MthTableConfig>());
         assert_eq!(layout.buffer_size, size_of::<MthBuffer>());
         assert_eq!(layout.effect_size, size_of::<MthEffect>());
+        assert_eq!(layout.table_event_size, size_of::<MthTableEvent>());
         assert_eq!(layout.peer_status_size, size_of::<MthPeerStatus>());
         assert_eq!(layout.abi_layout_size, size_of::<MthAbiLayout>());
         assert_eq!(
@@ -1456,6 +2550,140 @@ mod tests {
             code(BoundaryErrorCode::NullPointer)
         );
         assert!(required > 0);
+    }
+
+    #[test]
+    fn table_session_runs_one_rules_only_bot_hand_through_c_abi() {
+        let mut handle = ptr::null_mut();
+        let config = table_config(false, 0, Some(1));
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Success)
+        );
+        assert!(!handle.is_null());
+        assert_eq!(
+            // SAFETY: `handle` is a live table session returned above.
+            unsafe { mth_table_start_next_hand(handle) },
+            code(BoundaryErrorCode::Success)
+        );
+
+        let mut saw_started = false;
+        let mut saw_finished = false;
+        let mut saw_session_finished = false;
+        loop {
+            let mut event = MthTableEvent::empty();
+            let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+            if status == code(BoundaryErrorCode::NoEffect) {
+                break;
+            }
+            assert_eq!(status, code(BoundaryErrorCode::Success));
+            match event.kind {
+                MTH_TABLE_EVENT_HAND_STARTED => saw_started = true,
+                MTH_TABLE_EVENT_HAND_FINISHED => {
+                    saw_finished = true;
+                    let stacks = decode_u64_buffer(event.final_stacks);
+                    assert_eq!(stacks.iter().sum::<u64>(), 600);
+                }
+                MTH_TABLE_EVENT_SESSION_FINISHED => {
+                    saw_session_finished = true;
+                    assert_eq!(event.completed_hands, 1);
+                }
+                _ => {}
+            }
+            // SAFETY: `event` was returned by this library and is freed exactly once.
+            unsafe { mth_table_event_free(event) };
+        }
+        assert!(saw_started);
+        assert!(saw_finished);
+        assert!(saw_session_finished);
+        // SAFETY: `handle` was returned by this library and is freed exactly once.
+        unsafe { mth_table_session_free(handle) };
+    }
+
+    #[test]
+    fn table_session_requests_and_accepts_human_action() {
+        let mut handle = ptr::null_mut();
+        let mut config = table_config(true, 0, None);
+        config.player_count = 2;
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Success)
+        );
+        assert_eq!(
+            // SAFETY: `handle` is a live table session returned above.
+            unsafe { mth_table_start_next_hand(handle) },
+            code(BoundaryErrorCode::Success)
+        );
+
+        let (can_check, _to_call) = loop {
+            let mut event = MthTableEvent::empty();
+            let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+            assert_ne!(status, code(BoundaryErrorCode::NoEffect));
+            assert_eq!(status, code(BoundaryErrorCode::Success));
+            if event.kind == MTH_TABLE_EVENT_ACTION_REQUEST {
+                let request = (event.can_check, event.to_call_units);
+                unsafe { mth_table_event_free(event) };
+                break request;
+            }
+            unsafe { mth_table_event_free(event) };
+        };
+        let action = if can_check {
+            MTH_ACTION_CHECK
+        } else {
+            MTH_ACTION_CALL
+        };
+        assert_eq!(
+            // SAFETY: `handle` is live and an action request is pending.
+            unsafe { mth_table_submit_action(handle, action, 0) },
+            code(BoundaryErrorCode::Success)
+        );
+        let mut saw_action = false;
+        loop {
+            let mut event = MthTableEvent::empty();
+            let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+            if status == code(BoundaryErrorCode::NoEffect) {
+                break;
+            }
+            assert_eq!(status, code(BoundaryErrorCode::Success));
+            if event.kind == MTH_TABLE_EVENT_ACTION_TAKEN && event.actor == 0 {
+                saw_action = true;
+            }
+            unsafe { mth_table_event_free(event) };
+        }
+        assert!(saw_action);
+        // SAFETY: `handle` was returned by this library and is freed exactly once.
+        unsafe { mth_table_session_free(handle) };
+    }
+
+    #[test]
+    fn table_session_rejects_peer_backend_without_fallback() {
+        let mut handle = ptr::null_mut();
+        let mut config = table_config(false, 0, Some(1));
+        config.backend = MTH_TABLE_BACKEND_PEER;
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Configuration)
+        );
+        assert!(handle.is_null());
+    }
+
+    fn table_config(has_human: bool, human_seat: u8, hand_limit: Option<u64>) -> MthTableConfig {
+        MthTableConfig {
+            backend: MTH_TABLE_BACKEND_RULES_ONLY,
+            player_count: 6,
+            has_human_seat: has_human,
+            human_seat,
+            bot_preset: MTH_BOT_PRESET_BALANCED,
+            small_blind_units: 1,
+            big_blind_units: 2,
+            starting_stack_units: 100,
+            has_hand_limit: hand_limit.is_some(),
+            hand_limit: hand_limit.unwrap_or(0),
+            seed: 7,
+        }
     }
 
     #[derive(Debug)]

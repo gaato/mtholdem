@@ -52,9 +52,11 @@ whether the human seat is still live, has folded, or the command is running in
 protocol has publicly disclosed them through showdown. Folded or mucked bot
 hole cards remain hidden.
 
-Godot single-player should follow the same split. The Godot app may either call
-Rust bot policy through a future host boundary or implement its own UI-shaped
-policy, but the protocol crates remain unaware of single-player presentation.
+Godot single-player should follow the same split. If Godot uses the Rust bot
+policy, it should normally do so through a higher-level table-runner boundary
+that owns local bot seats and emits table events. Godot should not need to
+construct raw bot decision contexts for ordinary single-player play. The
+protocol crates remain unaware of single-player presentation.
 
 ## Alternatives Considered
 
@@ -104,6 +106,6 @@ policy, but the protocol crates remain unaware of single-player presentation.
   feature.
 - Bot tuning vocabulary such as looseness, aggression, call bias, bluff rate,
   and randomness is explicitly non-consensus policy.
-- If a downstream host later needs Rust-owned bot policy over C, add a new ADR
-  for that ABI surface instead of extending the existing session ABI
-  opportunistically.
+- If a downstream host later needs raw Rust-owned bot decisions over C, add a
+  new ADR for a direct `mth_bot_*` surface instead of extending the existing
+  peer or table ABIs opportunistically.

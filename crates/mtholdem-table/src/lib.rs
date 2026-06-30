@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use mtholdem::betting::Street;
+use mtholdem::betting::{ActionContext, BetAction, LegalActions, Street};
 use mtholdem::card::evaluate_best;
 use mtholdem::{Card, Chips, HandCategory, HandNumber, Result, Seat};
 
@@ -42,12 +42,20 @@ impl fmt::Display for TableBackend {
 pub enum TableEvent {
     /// A hand started with a selected backend, button, and carried stacks.
     HandStarted(HandStarted),
+    /// Local-visible hole cards were dealt or updated for a seat.
+    HoleCards(HoleCards),
+    /// A human-controlled seat must choose one legal action.
+    ActionRequest(ActionRequest),
+    /// A seat took an action.
+    ActionTaken(ActionTaken),
     /// A public board street opened.
     BoardOpened(BoardOpened),
     /// A hand reached showdown with one or more opened hands.
-    Showdown(TableShowdown),
+    Showdown(Showdown),
     /// A hand ended and produced final stacks.
     HandFinished(HandFinished),
+    /// The table session ended because its hand limit or liveness condition was reached.
+    SessionFinished(SessionFinished),
 }
 
 /// Start-of-hand table state.
@@ -63,13 +71,75 @@ pub struct HandStarted {
     pub starting_stacks: Vec<Chips>,
 }
 
+/// Local-visible private cards for one seat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HoleCards {
+    /// Hand number in the current table session.
+    pub hand: HandNumber,
+    /// Backend used for this hand.
+    pub backend: TableBackend,
+    /// Seat whose cards are visible to this local host.
+    pub seat: Seat,
+    /// The two visible hole cards.
+    pub cards: [Card; 2],
+}
+
+/// A table action prompt for a human-controlled seat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActionRequest {
+    /// Hand number in the current table session.
+    pub hand: HandNumber,
+    /// Backend used for this hand.
+    pub backend: TableBackend,
+    /// Seat that must act.
+    pub actor: Seat,
+    /// Current betting street.
+    pub street: Street,
+    /// Legal actions for `actor`.
+    pub legal_actions: LegalActions,
+    /// Public betting context for UI prompts and policy decisions.
+    pub action_context: ActionContext,
+}
+
+/// One public betting action taken by a seat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActionTaken {
+    /// Hand number in the current table session.
+    pub hand: HandNumber,
+    /// Backend used for this hand.
+    pub backend: TableBackend,
+    /// Seat that acted.
+    pub actor: Seat,
+    /// Street on which the action was taken.
+    pub street: Street,
+    /// Action submitted to the rules or peer backend.
+    pub action: BetAction,
+    /// Legal-action metadata that was current before the action was applied.
+    pub legal_actions: LegalActions,
+}
+
 /// Public board opening summary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoardOpened {
+    /// Hand number in the current table session.
+    pub hand: HandNumber,
+    /// Backend used for this hand.
+    pub backend: TableBackend,
     /// Street that was opened.
     pub street: Street,
     /// Board cards visible after the opening.
     pub board: Vec<Card>,
+}
+
+/// Showdown table event with hand context.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Showdown {
+    /// Hand number in the current table session.
+    pub hand: HandNumber,
+    /// Backend used for this hand.
+    pub backend: TableBackend,
+    /// Opened hand summary.
+    pub showdown: TableShowdown,
 }
 
 /// Showdown summary containing only hands that have actually opened.
@@ -149,6 +219,17 @@ impl ShowdownHand {
 pub struct HandFinished {
     /// Completed hand number.
     pub hand: HandNumber,
+    /// Backend used for this hand.
+    pub backend: TableBackend,
+    /// Final stacks by seat index.
+    pub final_stacks: Vec<Chips>,
+}
+
+/// End-of-session summary for a local table runner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionFinished {
+    /// Number of fully completed hands.
+    pub completed_hands: u64,
     /// Final stacks by seat index.
     pub final_stacks: Vec<Chips>,
 }

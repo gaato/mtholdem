@@ -499,7 +499,9 @@ dependencies = [
  "mental-card-core",
  "mtholdem",
  "mtholdem-adapter",
+ "mtholdem-bot",
  "mtholdem-peer",
+ "mtholdem-table",
  "rand 0.8.6",
 ]
 

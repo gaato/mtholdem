@@ -197,6 +197,9 @@ Both boundaries may expose the same public action context for prompts and bot
 decisions; `mth_peer_*` exposes it per local peer action request, while
 `mth_table_*` may expose it inside higher-level local table events. See
 [ADR-015](decisions/ADR-015-include-public-action-context-in-action-requests.md).
+Godot single-player should consume this table surface rather than a raw
+`mth_bot_*` decision ABI, so Godot does not need to rebuild legal actions,
+public context, stack state, or backend parity before each bot decision.
 
 Custom bot clients that join an open game are ordinary participants, not a
 special table-runner mode. They should use `mth_peer_*`, own their identity and

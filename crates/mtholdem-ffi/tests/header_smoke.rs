@@ -112,6 +112,24 @@ static_assert(MTH_PHASE_BOARD_REVEAL == 6u);
 static_assert(MTH_PHASE_SHOWDOWN == 7u);
 static_assert(MTH_PHASE_COMPLETE == 8u);
 
+static_assert(MTH_TABLE_BACKEND_PEER == 1u);
+static_assert(MTH_TABLE_BACKEND_RULES_ONLY == 2u);
+
+static_assert(MTH_TABLE_EVENT_HAND_STARTED == 1u);
+static_assert(MTH_TABLE_EVENT_HOLE_CARDS == 2u);
+static_assert(MTH_TABLE_EVENT_ACTION_REQUEST == 3u);
+static_assert(MTH_TABLE_EVENT_ACTION_TAKEN == 4u);
+static_assert(MTH_TABLE_EVENT_BOARD_OPENED == 5u);
+static_assert(MTH_TABLE_EVENT_SHOWDOWN == 6u);
+static_assert(MTH_TABLE_EVENT_HAND_FINISHED == 7u);
+static_assert(MTH_TABLE_EVENT_SESSION_FINISHED == 8u);
+
+static_assert(MTH_BOT_PRESET_NIT == 1u);
+static_assert(MTH_BOT_PRESET_BALANCED == 2u);
+static_assert(MTH_BOT_PRESET_LOOSE_PASSIVE == 3u);
+static_assert(MTH_BOT_PRESET_LAG == 4u);
+static_assert(MTH_BOT_PRESET_MANIAC == 5u);
+
 int main() {
     if (mth_abi_version_major() != MTH_ABI_VERSION_MAJOR) {
         return 1;
@@ -128,8 +146,10 @@ int main() {
         MTH_ABI_VERSION_MINOR,
         MTH_ABI_VERSION_PATCH,
         sizeof(MthSessionConfig),
+        sizeof(MthTableConfig),
         sizeof(MthBuffer),
         sizeof(MthEffect),
+        sizeof(MthTableEvent),
         sizeof(MthPeerStatus),
         sizeof(MthAbiLayout),
     };

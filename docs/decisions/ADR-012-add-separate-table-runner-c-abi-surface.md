@@ -48,6 +48,14 @@ seats for single-player or convenience modes, but remote and custom bot clients
 should interoperate through `mth_peer_*` and the ordinary transport or wire
 protocol.
 
+Godot single-player should use this table surface rather than a direct
+`mth_bot_*` decision ABI. Godot should poll table events, render them, and
+submit human actions when it receives an action-request event. It should not
+construct `BotDecisionContext`, legal-action metadata, stack state, initiative
+facts, or backend-specific public context just to ask the Rust bot for one
+action. Direct bot-decision exports may be reconsidered later for research or
+custom host tooling, but they are not the primary C ABI for local play.
+
 The table ABI should follow the same C ABI discipline as ADR-009:
 
 - opaque handles with explicit `*_free`;
@@ -104,8 +112,8 @@ properties and must not be hidden behind an automatic fallback. Peer-backed
 local play exercises the P2P artifact path. Rules-only local play is lighter
 and suitable for UI iteration, simulation, or purely local single-player.
 
-Before adding `mth_table_*` to `mtholdem-ffi`, encode the Rust event vocabulary
-from `mtholdem-table` rather than CLI text. The CLI may still own experimental
+The `mth_table_*` surface encodes the Rust event vocabulary from
+`mtholdem-table` rather than CLI text. The CLI may still own experimental
 runner control flow, but table events should remain target-independent so
 terminal wording and temporary CLI state do not become the ABI.
 
@@ -126,6 +134,16 @@ terminal wording and temporary CLI state do not become the ABI.
   responsibilities that remote participants must handle explicitly.
 - Rejected: Custom bots are ordinary participants and should target
   `mth_peer_*`, while `mth_table_*` stays a local convenience runner.
+
+### Expose `mth_bot_*` decision helpers as the first Godot ABI
+- Pros: Native hosts could reuse `mtholdem-bot` without adopting a full table
+  runner.
+- Cons: Pushes CLI-internal context assembly into every host. Godot would need
+  to recreate legal actions, public action context, stack carry-over, backend
+  parity, and visibility rules before it can ask for one bot action.
+- Rejected: Single-player hosts need table events and human prompts more than
+  raw policy calls. Add `mth_bot_*` only after a non-table consumer proves that
+  a direct decision ABI is the right boundary.
 
 ### Expose Godot-shaped C ABI structs
 - Pros: Less conversion code in the first Godot wrapper.
@@ -159,8 +177,11 @@ terminal wording and temporary CLI state do not become the ABI.
 - Custom bot authors can target the same peer and wire API as human clients;
   no bot-specific protocol role is needed.
 - Godot single-player can use `mth_table_*` without orchestrating multiple raw
-  `PeerSession` handles.
+  `PeerSession` handles or constructing bot-decision contexts.
 - The table ABI can expose both peer-backed and rules-only local play while
   preserving the same event vocabulary.
-- `mtholdem-table` is the Rust event vocabulary to encode before any
-  `mth_table_*` C ABI entrypoints are added.
+- `mtholdem-table` is the Rust event vocabulary encoded by the `mth_table_*`
+  C ABI entrypoints.
+- `mtholdem-bot` remains an internal policy dependency of the table runner for
+  local bot seats; it is not exposed through C as the first Godot integration
+  surface.
