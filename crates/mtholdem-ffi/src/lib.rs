@@ -1660,9 +1660,11 @@ impl MthTableSession {
     }
 
     fn submit_action(&mut self, action: BetAction) -> Result<(), Error> {
+        // The pending request is only consumed once the action is accepted.
+        // A rejected action must leave the prompt pending so the caller can
+        // resubmit; otherwise one illegal action would wedge the session.
         let request = self
             .awaiting_action
-            .take()
             .ok_or_else(|| mental_card_core::error::protocol("no table action is pending"))?;
         let Some(active) = self.active_hand.as_mut() else {
             return Err(mental_card_core::error::protocol(
@@ -1679,6 +1681,7 @@ impl MthTableSession {
             ));
         }
         active.hand.apply_action(actor, action)?;
+        self.awaiting_action = None;
         self.pending_events
             .push_back(RustTableEvent::ActionTaken(ActionTaken {
                 hand: active.hand_number,
@@ -2636,6 +2639,71 @@ mod tests {
         };
         assert_eq!(
             // SAFETY: `handle` is live and an action request is pending.
+            unsafe { mth_table_submit_action(handle, action, 0) },
+            code(BoundaryErrorCode::Success)
+        );
+        let mut saw_action = false;
+        loop {
+            let mut event = MthTableEvent::empty();
+            let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+            if status == code(BoundaryErrorCode::NoEffect) {
+                break;
+            }
+            assert_eq!(status, code(BoundaryErrorCode::Success));
+            if event.kind == MTH_TABLE_EVENT_ACTION_TAKEN && event.actor == 0 {
+                saw_action = true;
+            }
+            unsafe { mth_table_event_free(event) };
+        }
+        assert!(saw_action);
+        // SAFETY: `handle` was returned by this library and is freed exactly once.
+        unsafe { mth_table_session_free(handle) };
+    }
+
+    #[test]
+    fn table_session_keeps_prompt_pending_after_rejected_action() {
+        let mut handle = ptr::null_mut();
+        let mut config = table_config(true, 0, None);
+        config.player_count = 2;
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Success)
+        );
+        assert_eq!(
+            // SAFETY: `handle` is a live table session returned above.
+            unsafe { mth_table_start_next_hand(handle) },
+            code(BoundaryErrorCode::Success)
+        );
+
+        let (can_check, _to_call) = loop {
+            let mut event = MthTableEvent::empty();
+            let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+            assert_ne!(status, code(BoundaryErrorCode::NoEffect));
+            assert_eq!(status, code(BoundaryErrorCode::Success));
+            if event.kind == MTH_TABLE_EVENT_ACTION_REQUEST {
+                let request = (event.can_check, event.to_call_units);
+                unsafe { mth_table_event_free(event) };
+                break request;
+            }
+            unsafe { mth_table_event_free(event) };
+        };
+
+        // A raise to zero units is never legal; the engine must reject it
+        // without consuming the pending prompt.
+        assert_eq!(
+            // SAFETY: `handle` is live and an action request is pending.
+            unsafe { mth_table_submit_action(handle, MTH_ACTION_RAISE_TO, 0) },
+            code(BoundaryErrorCode::Rules)
+        );
+
+        let action = if can_check {
+            MTH_ACTION_CHECK
+        } else {
+            MTH_ACTION_CALL
+        };
+        assert_eq!(
+            // SAFETY: the prompt must still be pending after the rejection.
             unsafe { mth_table_submit_action(handle, action, 0) },
             code(BoundaryErrorCode::Success)
         );
