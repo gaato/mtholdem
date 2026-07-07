@@ -96,6 +96,10 @@ typedef struct MthTableConfig {
     bool has_hand_limit;
     uint64_t hand_limit;
     uint64_t seed;
+    /* When true, seat_presets_ptr must point at player_count MTH_BOT_PRESET_*
+     * codes in seat order; they are copied during construction only. */
+    bool has_seat_presets;
+    const uint32_t *seat_presets_ptr;
 } MthTableConfig;
 
 typedef struct MthBuffer {

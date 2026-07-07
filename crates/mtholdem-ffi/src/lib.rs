@@ -304,7 +304,7 @@ pub struct MthTableSession {
     active_hand: Option<RulesOnlyHand>,
     pending_events: VecDeque<RustTableEvent>,
     awaiting_action: Option<ActionRequest>,
-    bot: HeuristicBot,
+    bots: Vec<HeuristicBot>,
     rng: StdRng,
     last_error: Vec<u8>,
     session_finished: bool,
@@ -315,7 +315,6 @@ struct TableConfig {
     backend: TableBackend,
     player_count: usize,
     human: Option<Seat>,
-    preset: BotPreset,
     starting_stack: Chips,
     small_blind: Chips,
     big_blind: Chips,
@@ -385,6 +384,12 @@ pub struct MthTableConfig {
     pub hand_limit: u64,
     /// Deterministic local RNG seed for rules-only local play.
     pub seed: u64,
+    /// Whether `seat_presets_ptr` is used.
+    pub has_seat_presets: bool,
+    /// Pointer to `player_count` `MTH_BOT_PRESET_*` codes in seat order, borrowed
+    /// only during construction. Every entry must be a valid preset code; the
+    /// human seat's entry is validated but never drives an action.
+    pub seat_presets_ptr: *const u32,
 }
 
 /// Owned byte buffer returned across the C ABI.
@@ -985,6 +990,9 @@ pub unsafe extern "C" fn mth_table_event_free(event: MthTableEvent) {
 /// # Safety
 ///
 /// `out_handle` must be writable for one pointer value when non-null.
+/// When `config.has_seat_presets` is true, `config.seat_presets_ptr` must point
+/// at `config.player_count` readable u32 values for the duration of this call;
+/// the codes are copied and the pointer is not retained.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mth_table_session_new(
     config: MthTableConfig,
@@ -1581,11 +1589,28 @@ fn build_table_session(config: MthTableConfig) -> Result<MthTableSession, Error>
     } else {
         None
     };
+    let table_preset = bot_preset_from_code(config.bot_preset)?;
+    let seat_presets: Vec<BotPreset> = if config.has_seat_presets {
+        if config.seat_presets_ptr.is_null() {
+            return Err(mental_card_core::error::configuration(
+                "seat presets pointer is null while has_seat_presets is set",
+            ));
+        }
+        // SAFETY: The `mth_table_session_new` contract requires `seat_presets_ptr`
+        // to point at `player_count` u32 codes when `has_seat_presets` is true, and
+        // `player_count` was validated above.
+        let codes = unsafe { slice::from_raw_parts(config.seat_presets_ptr, config.player_count) };
+        codes
+            .iter()
+            .map(|&value| bot_preset_from_code(value))
+            .collect::<Result<_, _>>()?
+    } else {
+        vec![table_preset; config.player_count]
+    };
     let table_config = TableConfig {
         backend,
         player_count: config.player_count,
         human,
-        preset: bot_preset_from_code(config.bot_preset)?,
         starting_stack,
         small_blind,
         big_blind,
@@ -1599,7 +1624,10 @@ fn build_table_session(config: MthTableConfig) -> Result<MthTableSession, Error>
         active_hand: None,
         pending_events: VecDeque::new(),
         awaiting_action: None,
-        bot: HeuristicBot::from_preset(table_config.preset),
+        bots: seat_presets
+            .into_iter()
+            .map(HeuristicBot::from_preset)
+            .collect(),
         rng: StdRng::seed_from_u64(config.seed),
         last_error: Vec::new(),
         session_finished: false,
@@ -1820,7 +1848,10 @@ impl MthTableSession {
         .with_board(board)
         .with_action_context(request.action_context)
         .with_postflop_initiative(false);
-        let action = self.bot.decide(&context, &mut self.rng).action;
+        let bot = self.bots.get(request.actor.index()).ok_or_else(|| {
+            mental_card_core::error::protocol("bot actor seat is outside the table")
+        })?;
+        let action = bot.decide(&context, &mut self.rng).action;
         let active = self.active_hand_mut()?;
         let hand_number = active.hand_number;
         active.hand.apply_action(request.actor, action)?;
@@ -2751,7 +2782,91 @@ mod tests {
             has_hand_limit: hand_limit.is_some(),
             hand_limit: hand_limit.unwrap_or(0),
             seed: 7,
+            has_seat_presets: false,
+            seat_presets_ptr: ptr::null(),
         }
+    }
+
+    #[test]
+    fn table_session_runs_with_per_seat_presets() {
+        let presets = [
+            MTH_BOT_PRESET_NIT,
+            MTH_BOT_PRESET_BALANCED,
+            MTH_BOT_PRESET_LOOSE_PASSIVE,
+            MTH_BOT_PRESET_LAG,
+            MTH_BOT_PRESET_MANIAC,
+            MTH_BOT_PRESET_BALANCED,
+        ];
+        let mut config = table_config(false, 0, Some(1));
+        config.has_seat_presets = true;
+        config.seat_presets_ptr = presets.as_ptr();
+        let mut handle = ptr::null_mut();
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer and `presets` outlives the call.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Success)
+        );
+        assert!(!handle.is_null());
+        assert_eq!(
+            // SAFETY: `handle` is a live table session returned above.
+            unsafe { mth_table_start_next_hand(handle) },
+            code(BoundaryErrorCode::Success)
+        );
+        let mut saw_session_finished = false;
+        loop {
+            let mut event = MthTableEvent::empty();
+            // SAFETY: `handle` is live and `event` is a valid out pointer.
+            let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+            if status == code(BoundaryErrorCode::NoEffect) {
+                break;
+            }
+            assert_eq!(status, code(BoundaryErrorCode::Success));
+            if event.kind == MTH_TABLE_EVENT_SESSION_FINISHED {
+                saw_session_finished = true;
+            }
+            // SAFETY: `event` was returned by this library and is freed exactly once.
+            unsafe { mth_table_event_free(event) };
+        }
+        assert!(saw_session_finished);
+        // SAFETY: `handle` was returned by this library and is freed exactly once.
+        unsafe { mth_table_session_free(handle) };
+    }
+
+    #[test]
+    fn table_session_rejects_unknown_seat_preset_code() {
+        let presets = [
+            MTH_BOT_PRESET_NIT,
+            99,
+            MTH_BOT_PRESET_BALANCED,
+            MTH_BOT_PRESET_BALANCED,
+            MTH_BOT_PRESET_BALANCED,
+            MTH_BOT_PRESET_BALANCED,
+        ];
+        let mut config = table_config(false, 0, Some(1));
+        config.has_seat_presets = true;
+        config.seat_presets_ptr = presets.as_ptr();
+        let mut handle = ptr::null_mut();
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer and `presets` outlives the call.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Configuration)
+        );
+        assert!(handle.is_null());
+    }
+
+    #[test]
+    fn table_session_rejects_null_seat_presets_pointer() {
+        let mut config = table_config(false, 0, Some(1));
+        config.has_seat_presets = true;
+        config.seat_presets_ptr = ptr::null();
+        let mut handle = ptr::null_mut();
+        assert_eq!(
+            // SAFETY: This test intentionally passes a null presets pointer with a
+            // valid out-handle pointer to verify construction failure handling.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Configuration)
+        );
+        assert!(handle.is_null());
     }
 
     #[derive(Debug)]
