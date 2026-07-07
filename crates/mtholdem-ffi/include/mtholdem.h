@@ -100,6 +100,15 @@ typedef struct MthTableConfig {
      * codes in seat order; they are copied during construction only. */
     bool has_seat_presets;
     const uint32_t *seat_presets_ptr;
+    /* When true, blind_levels_ptr must point at blind_level_count * 2 chip
+     * units as (small, big) pairs in level order; they are copied during
+     * construction only. Level 0 must equal small_blind_units/big_blind_units,
+     * every level must satisfy 0 < small < big, no big blind may exceed the
+     * chips in play, and hands_per_blind_level must be at least 1. */
+    bool has_blind_schedule;
+    const uint64_t *blind_levels_ptr;
+    size_t blind_level_count;
+    uint64_t hands_per_blind_level;
 } MthTableConfig;
 
 typedef struct MthBuffer {
@@ -173,6 +182,10 @@ typedef struct MthTableEvent {
     bool has_post_action_totals;
     uint64_t pot_after_units;
     uint64_t actor_stack_after_units;
+    /* Posted blinds reported with MTH_TABLE_EVENT_HAND_STARTED; the big blind
+     * reuses big_blind_units above. */
+    bool has_blinds;
+    uint64_t small_blind_units;
     MthBuffer board_cards;
     MthBuffer hole_cards;
     MthBuffer starting_stacks;

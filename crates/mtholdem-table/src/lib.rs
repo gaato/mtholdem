@@ -67,6 +67,11 @@ pub struct HandStarted {
     pub backend: TableBackend,
     /// Dealer button for this hand.
     pub button: Seat,
+    /// Small blind posted for this hand. Hosts with a blind schedule report the
+    /// level actually applied, not the session's base blinds.
+    pub small_blind: Chips,
+    /// Big blind posted for this hand.
+    pub big_blind: Chips,
     /// Starting stacks by seat index.
     pub starting_stacks: Vec<Chips>,
 }

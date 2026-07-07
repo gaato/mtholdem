@@ -310,15 +310,27 @@ pub struct MthTableSession {
     session_finished: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct TableConfig {
     backend: TableBackend,
     player_count: usize,
     human: Option<Seat>,
-    starting_stack: Chips,
     small_blind: Chips,
     big_blind: Chips,
     hand_limit: Option<u64>,
+    blind_schedule: Option<BlindSchedule>,
+    /// Rules-only tables carry no economic collateral, so the per-hand loss cap
+    /// is the total chips in play: any stack, however large it has grown, may
+    /// go all-in.
+    maximum_hand_loss: Chips,
+}
+
+#[derive(Clone, Debug)]
+struct BlindSchedule {
+    /// `(small blind, big blind)` per level; validated non-empty at construction.
+    levels: Vec<(Chips, Chips)>,
+    /// Completed hands per level; validated nonzero at construction.
+    hands_per_level: u64,
 }
 
 #[derive(Debug)]
@@ -390,6 +402,17 @@ pub struct MthTableConfig {
     /// only during construction. Every entry must be a valid preset code; the
     /// human seat's entry is validated but never drives an action.
     pub seat_presets_ptr: *const u32,
+    /// Whether the blind-schedule fields are used.
+    pub has_blind_schedule: bool,
+    /// Pointer to `blind_level_count * 2` chip units as `(small, big)` pairs in
+    /// level order, borrowed only during construction. Level 0 must equal
+    /// `small_blind_units`/`big_blind_units`, every level must satisfy
+    /// `0 < small < big`, and no big blind may exceed the chips in play.
+    pub blind_levels_ptr: *const u64,
+    /// Number of `(small, big)` pairs in `blind_levels_ptr`.
+    pub blind_level_count: usize,
+    /// Completed hands per blind level; must be at least 1.
+    pub hands_per_blind_level: u64,
 }
 
 /// Owned byte buffer returned across the C ABI.
@@ -566,6 +589,13 @@ pub struct MthTableEvent {
     pub pot_after_units: u64,
     /// Actor's remaining stack after the action was applied.
     pub actor_stack_after_units: u64,
+    /// Whether posted-blind fields are meaningful. Hand-started events report
+    /// the blinds actually posted (`small_blind_units` plus the shared
+    /// `big_blind_units` field), which follow the blind schedule when one is
+    /// configured.
+    pub has_blinds: bool,
+    /// Small blind posted for this hand.
+    pub small_blind_units: u64,
     /// Board cards as card indices.
     pub board_cards: MthBuffer,
     /// Visible hole cards as two card indices.
@@ -614,6 +644,8 @@ impl MthTableEvent {
             has_post_action_totals: false,
             pot_after_units: 0,
             actor_stack_after_units: 0,
+            has_blinds: false,
+            small_blind_units: 0,
             board_cards: MthBuffer::empty(),
             hole_cards: MthBuffer::empty(),
             starting_stacks: MthBuffer::empty(),
@@ -726,6 +758,9 @@ impl From<RustTableEvent> for MthTableEvent {
                 event.hand = started.hand.to_u64();
                 event.has_button = true;
                 event.button_seat = started.button.to_u8();
+                event.has_blinds = true;
+                event.small_blind_units = started.small_blind.units();
+                event.big_blind_units = started.big_blind.units();
                 event.starting_stacks =
                     MthBuffer::from_vec(encode_chips_slice(&started.starting_stacks));
             }
@@ -1619,14 +1654,74 @@ fn build_table_session(config: MthTableConfig) -> Result<MthTableSession, Error>
     } else {
         vec![table_preset; config.player_count]
     };
+    // Rules-only tables have no collateral to protect, so the per-hand loss cap
+    // must never bind below a stack: cap at the total chips in play instead of
+    // the starting stack, or a winner's grown stack could not go all-in.
+    let seat_count = u64::try_from(config.player_count).map_err(|_| {
+        mental_card_core::error::configuration("table player count exceeds u64 range")
+    })?;
+    let maximum_hand_loss = starting_stack.checked_mul(seat_count)?;
+    let blind_schedule = if config.has_blind_schedule {
+        if config.blind_levels_ptr.is_null() {
+            return Err(mental_card_core::error::configuration(
+                "blind levels pointer is null while has_blind_schedule is set",
+            ));
+        }
+        if config.blind_level_count == 0 {
+            return Err(mental_card_core::error::configuration(
+                "blind schedule needs at least one level",
+            ));
+        }
+        if config.hands_per_blind_level == 0 {
+            return Err(mental_card_core::error::configuration(
+                "hands per blind level must be at least 1",
+            ));
+        }
+        let value_count = config
+            .blind_level_count
+            .checked_mul(2)
+            .ok_or_else(|| mental_card_core::error::configuration("blind level count overflow"))?;
+        // SAFETY: The `mth_table_session_new` contract requires `blind_levels_ptr`
+        // to point at `blind_level_count * 2` u64 values when `has_blind_schedule`
+        // is true, and the pointer was checked for null above.
+        let values = unsafe { slice::from_raw_parts(config.blind_levels_ptr, value_count) };
+        let levels: Vec<(Chips, Chips)> = values
+            .chunks_exact(2)
+            .map(|pair| (Chips::from_units(pair[0]), Chips::from_units(pair[1])))
+            .collect();
+        for &(level_small, level_big) in &levels {
+            if level_small.is_zero() || level_big <= level_small {
+                return Err(mental_card_core::error::configuration(
+                    "every blind level must satisfy 0 < small blind < big blind",
+                ));
+            }
+            if level_big > maximum_hand_loss {
+                return Err(mental_card_core::error::configuration(
+                    "a blind level's big blind exceeds the chips in play",
+                ));
+            }
+        }
+        if levels[0] != (small_blind, big_blind) {
+            return Err(mental_card_core::error::configuration(
+                "blind level 0 must match the configured small and big blinds",
+            ));
+        }
+        Some(BlindSchedule {
+            levels,
+            hands_per_level: config.hands_per_blind_level,
+        })
+    } else {
+        None
+    };
     let table_config = TableConfig {
         backend,
         player_count: config.player_count,
         human,
-        starting_stack,
         small_blind,
         big_blind,
         hand_limit,
+        blind_schedule,
+        maximum_hand_loss,
     };
     Ok(MthTableSession {
         config: table_config,
@@ -1665,18 +1760,21 @@ impl MthTableSession {
             let second = draw_card(&mut deck)?;
             hole_cards[seat.index()] = Some([first, second]);
         }
+        let (small_blind, big_blind) = self.current_blinds();
         let hand = HoldemHand::new(
             &self.stacks,
             self.button,
-            self.config.small_blind,
-            self.config.big_blind,
-            self.config.starting_stack,
+            small_blind,
+            big_blind,
+            self.config.maximum_hand_loss,
         )?;
         self.pending_events
             .push_back(RustTableEvent::HandStarted(HandStarted {
                 hand: hand_number,
                 backend: self.config.backend,
                 button: self.button,
+                small_blind,
+                big_blind,
                 starting_stacks: self.stacks.clone(),
             }));
         if let Some(human) = self.config.human {
@@ -1965,6 +2063,19 @@ impl MthTableSession {
 
     fn active_player_count(&self) -> usize {
         self.stacks.iter().filter(|stack| !stack.is_zero()).count()
+    }
+
+    /// Returns the blinds for the next hand: the schedule level indexed by
+    /// completed hands, clamped to the last level, or the flat blinds when no
+    /// schedule is configured.
+    fn current_blinds(&self) -> (Chips, Chips) {
+        let Some(schedule) = &self.config.blind_schedule else {
+            return (self.config.small_blind, self.config.big_blind);
+        };
+        let level = usize::try_from(self.completed_hands / schedule.hands_per_level)
+            .unwrap_or(usize::MAX)
+            .min(schedule.levels.len() - 1);
+        schedule.levels[level]
     }
 
     fn session_should_finish(&self) -> bool {
@@ -2809,7 +2920,112 @@ mod tests {
             seed: 7,
             has_seat_presets: false,
             seat_presets_ptr: ptr::null(),
+            has_blind_schedule: false,
+            blind_levels_ptr: ptr::null(),
+            blind_level_count: 0,
+            hands_per_blind_level: 0,
         }
+    }
+
+    #[test]
+    fn table_session_reports_posted_blinds_and_advances_schedule() {
+        let levels: [u64; 4] = [1, 2, 2, 4];
+        let mut config = table_config(false, 0, Some(2));
+        config.has_blind_schedule = true;
+        config.blind_levels_ptr = levels.as_ptr();
+        config.blind_level_count = 2;
+        config.hands_per_blind_level = 1;
+        let mut handle = ptr::null_mut();
+        assert_eq!(
+            // SAFETY: `handle` is a valid out pointer and `levels` outlives the call.
+            unsafe { mth_table_session_new(config, &raw mut handle) },
+            code(BoundaryErrorCode::Success)
+        );
+        assert!(!handle.is_null());
+
+        let mut started_blinds = Vec::new();
+        for _ in 0..2 {
+            assert_eq!(
+                // SAFETY: `handle` is a live table session returned above.
+                unsafe { mth_table_start_next_hand(handle) },
+                code(BoundaryErrorCode::Success)
+            );
+            loop {
+                let mut event = MthTableEvent::empty();
+                // SAFETY: `handle` is live and `event` is a valid out pointer.
+                let status = unsafe { mth_table_next_event(handle, &raw mut event) };
+                if status == code(BoundaryErrorCode::NoEffect) {
+                    break;
+                }
+                assert_eq!(status, code(BoundaryErrorCode::Success));
+                if event.kind == MTH_TABLE_EVENT_HAND_STARTED {
+                    assert!(event.has_blinds);
+                    started_blinds.push((event.small_blind_units, event.big_blind_units));
+                }
+                // SAFETY: `event` was returned by this library and is freed exactly once.
+                unsafe { mth_table_event_free(event) };
+            }
+        }
+        assert_eq!(started_blinds, vec![(1, 2), (2, 4)]);
+        // SAFETY: `handle` was returned by this library and is freed exactly once.
+        unsafe { mth_table_session_free(handle) };
+    }
+
+    #[test]
+    fn table_session_rejects_invalid_blind_schedules() {
+        let with_schedule = |levels: &[u64], hands_per_level: u64| {
+            let mut config = table_config(false, 0, Some(1));
+            config.has_blind_schedule = true;
+            config.blind_levels_ptr = levels.as_ptr();
+            config.blind_level_count = levels.len() / 2;
+            config.hands_per_blind_level = hands_per_level;
+            config
+        };
+        let build = |config: MthTableConfig| {
+            let mut handle = ptr::null_mut();
+            // SAFETY: `handle` is a valid out pointer and every schedule slice
+            // used by these cases outlives the call.
+            let status = unsafe { mth_table_session_new(config, &raw mut handle) };
+            assert!(handle.is_null());
+            status
+        };
+
+        // Level 0 must match the flat small/big blind configuration (1, 2).
+        assert_eq!(
+            build(with_schedule(&[2, 4, 4, 8], 1)),
+            code(BoundaryErrorCode::Configuration)
+        );
+        // Every level must satisfy 0 < small < big.
+        assert_eq!(
+            build(with_schedule(&[1, 2, 4, 4], 1)),
+            code(BoundaryErrorCode::Configuration)
+        );
+        assert_eq!(
+            build(with_schedule(&[1, 2, 0, 4], 1)),
+            code(BoundaryErrorCode::Configuration)
+        );
+        // A big blind above the chips in play (6 seats x 100) can never be posted.
+        assert_eq!(
+            build(with_schedule(&[1, 2, 300, 601], 1)),
+            code(BoundaryErrorCode::Configuration)
+        );
+        // Hands per level must be at least 1.
+        assert_eq!(
+            build(with_schedule(&[1, 2, 2, 4], 0)),
+            code(BoundaryErrorCode::Configuration)
+        );
+        // An empty schedule has no level to apply.
+        assert_eq!(
+            build(with_schedule(&[], 1)),
+            code(BoundaryErrorCode::Configuration)
+        );
+
+        let mut null_levels = table_config(false, 0, Some(1));
+        null_levels.has_blind_schedule = true;
+        null_levels.blind_levels_ptr = ptr::null();
+        null_levels.blind_level_count = 2;
+        null_levels.hands_per_blind_level = 1;
+        assert_eq!(build(null_levels), code(BoundaryErrorCode::Configuration));
     }
 
     #[test]
