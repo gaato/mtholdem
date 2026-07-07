@@ -116,6 +116,10 @@ pub struct ActionTaken {
     pub action: BetAction,
     /// Legal-action metadata that was current before the action was applied.
     pub legal_actions: LegalActions,
+    /// Pot size after the action was applied.
+    pub pot_after: Chips,
+    /// Actor's remaining stack after the action was applied.
+    pub actor_stack_after: Chips,
 }
 
 /// Public board opening summary.

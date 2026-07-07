@@ -560,6 +560,12 @@ pub struct MthTableEvent {
     pub action_kind: u32,
     /// Raise-to amount for raise actions.
     pub raise_to_units: u64,
+    /// Whether post-action totals are meaningful.
+    pub has_post_action_totals: bool,
+    /// Pot size after the action was applied.
+    pub pot_after_units: u64,
+    /// Actor's remaining stack after the action was applied.
+    pub actor_stack_after_units: u64,
     /// Board cards as card indices.
     pub board_cards: MthBuffer,
     /// Visible hole cards as two card indices.
@@ -605,6 +611,9 @@ impl MthTableEvent {
             has_action: false,
             action_kind: 0,
             raise_to_units: 0,
+            has_post_action_totals: false,
+            pot_after_units: 0,
+            actor_stack_after_units: 0,
             board_cards: MthBuffer::empty(),
             hole_cards: MthBuffer::empty(),
             starting_stacks: MthBuffer::empty(),
@@ -747,6 +756,9 @@ impl From<RustTableEvent> for MthTableEvent {
                 event.street = street_code(taken.street);
                 fill_legal_actions(&mut event, taken.legal_actions);
                 fill_action(&mut event, taken.action);
+                event.has_post_action_totals = true;
+                event.pot_after_units = taken.pot_after.units();
+                event.actor_stack_after_units = taken.actor_stack_after.units();
             }
             RustTableEvent::BoardOpened(board) => {
                 event.kind = MTH_TABLE_EVENT_BOARD_OPENED;
@@ -1710,14 +1722,19 @@ impl MthTableSession {
         }
         active.hand.apply_action(actor, action)?;
         self.awaiting_action = None;
+        let hand_number = active.hand_number;
+        let pot_after = active.hand.ledger().pot()?;
+        let actor_stack_after = active.hand.ledger().stack(actor)?;
         self.pending_events
             .push_back(RustTableEvent::ActionTaken(ActionTaken {
-                hand: active.hand_number,
+                hand: hand_number,
                 backend: self.config.backend,
                 actor,
                 street: request.street,
                 action,
                 legal_actions: request.legal_actions,
+                pot_after,
+                actor_stack_after,
             }));
         self.progress_until_blocked()
     }
@@ -1855,6 +1872,8 @@ impl MthTableSession {
         let active = self.active_hand_mut()?;
         let hand_number = active.hand_number;
         active.hand.apply_action(request.actor, action)?;
+        let pot_after = active.hand.ledger().pot()?;
+        let actor_stack_after = active.hand.ledger().stack(request.actor)?;
         self.pending_events
             .push_back(RustTableEvent::ActionTaken(ActionTaken {
                 hand: hand_number,
@@ -1863,6 +1882,8 @@ impl MthTableSession {
                 street: request.street,
                 action,
                 legal_actions: request.legal_actions,
+                pot_after,
+                actor_stack_after,
             }));
         Ok(())
     }
@@ -2683,6 +2704,10 @@ mod tests {
             assert_eq!(status, code(BoundaryErrorCode::Success));
             if event.kind == MTH_TABLE_EVENT_ACTION_TAKEN && event.actor == 0 {
                 saw_action = true;
+                assert!(event.has_post_action_totals);
+                // Blinds are already in the pot when the first action resolves.
+                assert!(event.pot_after_units >= 3);
+                assert!(event.actor_stack_after_units <= 100);
             }
             unsafe { mth_table_event_free(event) };
         }

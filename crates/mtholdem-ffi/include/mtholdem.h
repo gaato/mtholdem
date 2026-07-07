@@ -169,6 +169,10 @@ typedef struct MthTableEvent {
     bool has_action;
     uint32_t action_kind;
     uint64_t raise_to_units;
+    /* Post-action totals reported with MTH_TABLE_EVENT_ACTION_TAKEN. */
+    bool has_post_action_totals;
+    uint64_t pot_after_units;
+    uint64_t actor_stack_after_units;
     MthBuffer board_cards;
     MthBuffer hole_cards;
     MthBuffer starting_stacks;
