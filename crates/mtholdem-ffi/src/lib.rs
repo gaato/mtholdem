@@ -148,7 +148,9 @@ use std::ptr;
 use std::slice;
 
 use mental_card_core::error::Error;
-use mental_card_core::identity::{IDENTITY_PUBLIC_KEY_BYTES, IdentityPublic, IdentitySecret};
+use mental_card_core::identity::{
+    IDENTITY_PUBLIC_KEY_BYTES as CORE_IDENTITY_PUBLIC_KEY_BYTES, IdentityPublic, IdentitySecret,
+};
 use mtholdem::betting::{BetAction, LegalActions, Street};
 use mtholdem::config::{EconomicSecurity, Roster, SessionConfig};
 use mtholdem::holdem::{HandProgress, HoldemHand};
@@ -156,9 +158,10 @@ use mtholdem::types::{MAX_PLAYERS, MIN_PLAYERS};
 use mtholdem::{Card, Chips, HandNumber, Rank, Seat, SessionId, Suit};
 use mtholdem_adapter::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, BoundaryAction, BoundaryActionKind,
-    BoundaryEffect, BoundaryEffectKind, BoundaryErrorCode, BoundaryPeerPhase,
+    BoundaryEffect, BoundaryEffectKind, BoundaryErrorCode, BoundaryOpenedShowdownHand,
+    BoundaryPeerPhase, BoundaryPresentationEvent, BoundaryPresentationEventKind,
     decode_certified_checkpoint, decode_showdown_bundle, encode_checkpoint_state, encode_effects,
-    encode_recovery_bundle,
+    encode_presentation_events, encode_recovery_bundle,
 };
 use mtholdem_bot::{BotDecisionContext, BotPreset, HeuristicBot};
 use mtholdem_peer::PeerSession;
@@ -175,6 +178,11 @@ thread_local! {
 }
 
 const PANIC_ERROR_MESSAGE: &str = "Rust panic crossed the C ABI boundary";
+
+/// Required byte length of an Ed25519 identity seed.
+pub const MTH_IDENTITY_SEED_BYTES: usize = 32;
+/// Required byte length of a canonical Ed25519 identity public key.
+pub const MTH_IDENTITY_PUBLIC_KEY_BYTES: usize = CORE_IDENTITY_PUBLIC_KEY_BYTES;
 
 /// Operation completed successfully.
 pub const MTH_ERROR_SUCCESS: i32 = BoundaryErrorCode::Success as i32;
@@ -230,6 +238,23 @@ pub const MTH_EFFECT_PUBLISH_SHOWDOWN_BUNDLE: u32 =
 /// Report a final hand result.
 pub const MTH_EFFECT_FINISHED: u32 = BoundaryEffectKind::Finished as u32;
 
+/// A verified peer hand started.
+pub const MTH_PEER_EVENT_HAND_STARTED: u32 = BoundaryPresentationEventKind::HandStarted as u32;
+/// The local peer opened its private hole cards.
+pub const MTH_PEER_EVENT_LOCAL_HOLE_CARDS_OPENED: u32 =
+    BoundaryPresentationEventKind::LocalHoleCardsOpened as u32;
+/// A signed betting action passed native validation.
+pub const MTH_PEER_EVENT_BETTING_ACTION_ACCEPTED: u32 =
+    BoundaryPresentationEventKind::BettingActionAccepted as u32;
+/// A complete board street opened.
+pub const MTH_PEER_EVENT_BOARD_STREET_OPENED: u32 =
+    BoundaryPresentationEventKind::BoardStreetOpened as u32;
+/// One cryptographically verified showdown hand opened.
+pub const MTH_PEER_EVENT_SHOWDOWN_HAND_OPENED: u32 =
+    BoundaryPresentationEventKind::ShowdownHandOpened as u32;
+/// The peer hand reached deterministic completion.
+pub const MTH_PEER_EVENT_HAND_FINISHED: u32 = BoundaryPresentationEventKind::HandFinished as u32;
+
 /// Waiting for key announcements.
 pub const MTH_PHASE_KEY_SETUP: u32 = BoundaryPeerPhase::KeySetup as u32;
 /// Waiting for shuffle contributions.
@@ -283,11 +308,12 @@ pub const MTH_BOT_PRESET_MANIAC: u32 = 5;
 /// Opaque peer-session handle owned by the C ABI.
 ///
 /// The handle keeps Rust-only state behind a stable pointer: the typed peer session,
-/// its CSPRNG, queued boundary effects, and the last handle-local error message.
+/// its CSPRNG, queued boundary values, and the last handle-local error message.
 pub struct MthPeerSession {
     session: PeerSession,
     rng: OsRng,
     pending_effects: VecDeque<BoundaryEffect>,
+    pending_presentation_events: VecDeque<BoundaryPresentationEvent>,
     last_error: Vec<u8>,
 }
 
@@ -523,6 +549,68 @@ pub struct MthEffect {
     pub finished_hand: u64,
 }
 
+/// One verified player-visible peer event returned across the C ABI.
+///
+/// After a successful [`mth_peer_session_next_presentation_event`] call, the caller
+/// owns every embedded buffer and must pass the whole event to [`mth_peer_event_free`]
+/// exactly once.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MthPeerEvent {
+    /// One of the `MTH_PEER_EVENT_*` constants.
+    pub kind: u32,
+    /// Current hand number.
+    pub hand: u64,
+    /// One of the `MTH_PHASE_*` constants.
+    pub phase: u32,
+    /// Seat whose local view this event represents.
+    pub local_seat: u8,
+    /// Dealer button seat.
+    pub button_seat: u8,
+    /// Whether `street` is meaningful.
+    pub has_street: bool,
+    /// Current betting street discriminant.
+    pub street: u32,
+    /// Whether `next_actor` is meaningful.
+    pub has_next_actor: bool,
+    /// Next seat expected to act.
+    pub next_actor: u8,
+    /// Configured small blind in chip units.
+    pub small_blind_units: u64,
+    /// Configured big blind in chip units.
+    pub big_blind_units: u64,
+    /// Current unsettled pot in chip units.
+    pub pot_units: u64,
+    /// Whether accepted-action fields are meaningful.
+    pub has_accepted_action: bool,
+    /// Seat whose action was accepted.
+    pub action_actor: u8,
+    /// Street on which the action was accepted.
+    pub action_street: u32,
+    /// One of the `MTH_ACTION_*` constants.
+    pub action_kind: u32,
+    /// Raise-to amount for `MTH_ACTION_RAISE_TO`.
+    pub raise_to_units: u64,
+    /// Whether `opened_street` is meaningful.
+    pub has_opened_street: bool,
+    /// Street opened by a board-street event.
+    pub opened_street: u32,
+    /// Whether `showdown_seat` is meaningful.
+    pub has_showdown_seat: bool,
+    /// Seat newly disclosed by a showdown-hand event.
+    pub showdown_seat: u8,
+    /// Current stacks as little-endian `u64` chip units in table seat order.
+    pub stacks: MthBuffer,
+    /// Opened board cards as standard card indices.
+    pub board_cards: MthBuffer,
+    /// Only the local peer's two hole cards as standard card indices.
+    pub local_hole_cards: MthBuffer,
+    /// Verified showdown rows: seat, first card, second card, category.
+    pub showdown_rows: MthBuffer,
+    /// Final stacks as little-endian `u64` chip units after completion.
+    pub final_stacks: MthBuffer,
+}
+
 /// One local table event returned across the C ABI.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -748,6 +836,92 @@ impl From<BoundaryEffect> for MthEffect {
     }
 }
 
+impl MthPeerEvent {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            hand: 0,
+            phase: 0,
+            local_seat: 0,
+            button_seat: 0,
+            has_street: false,
+            street: 0,
+            has_next_actor: false,
+            next_actor: 0,
+            small_blind_units: 0,
+            big_blind_units: 0,
+            pot_units: 0,
+            has_accepted_action: false,
+            action_actor: 0,
+            action_street: 0,
+            action_kind: 0,
+            raise_to_units: 0,
+            has_opened_street: false,
+            opened_street: 0,
+            has_showdown_seat: false,
+            showdown_seat: 0,
+            stacks: MthBuffer::empty(),
+            board_cards: MthBuffer::empty(),
+            local_hole_cards: MthBuffer::empty(),
+            showdown_rows: MthBuffer::empty(),
+            final_stacks: MthBuffer::empty(),
+        }
+    }
+}
+
+impl From<BoundaryPresentationEvent> for MthPeerEvent {
+    fn from(value: BoundaryPresentationEvent) -> Self {
+        let mut event = Self::empty();
+        event.kind = boundary_presentation_event_kind_code(value.kind());
+        let snapshot = value.snapshot();
+        event.hand = snapshot.hand();
+        event.phase = boundary_peer_phase_code(snapshot.phase());
+        event.local_seat = snapshot.local_seat();
+        event.button_seat = snapshot.button_seat();
+        if let Some(street) = snapshot.street() {
+            event.has_street = true;
+            event.street = street;
+        }
+        if let Some(actor) = snapshot.next_actor() {
+            event.has_next_actor = true;
+            event.next_actor = actor;
+        }
+        event.small_blind_units = snapshot.small_blind_units();
+        event.big_blind_units = snapshot.big_blind_units();
+        event.pot_units = snapshot.pot_units();
+        if let Some(accepted) = value.accepted_action() {
+            event.has_accepted_action = true;
+            event.action_actor = accepted.actor();
+            event.action_street = accepted.street();
+            event.action_kind = boundary_action_kind_code(accepted.action().kind());
+            event.raise_to_units = accepted.action().raise_to_units();
+        }
+        if let Some(street) = value.opened_street() {
+            event.has_opened_street = true;
+            event.opened_street = street;
+        }
+        if let Some(seat) = value.showdown_seat() {
+            event.has_showdown_seat = true;
+            event.showdown_seat = seat;
+        }
+        event.stacks = MthBuffer::from_vec(encode_u64_slice(snapshot.stacks_units()));
+        event.board_cards = MthBuffer::from_vec(snapshot.board_cards().to_vec());
+        event.local_hole_cards = MthBuffer::from_vec(
+            snapshot
+                .local_hole_cards()
+                .map_or_else(Vec::new, |cards| cards.to_vec()),
+        );
+        event.showdown_rows =
+            MthBuffer::from_vec(encode_boundary_showdown_rows(snapshot.showdown_hands()));
+        event.final_stacks = MthBuffer::from_vec(
+            snapshot
+                .final_stacks_units()
+                .map_or_else(Vec::new, encode_u64_slice),
+        );
+        event
+    }
+}
+
 impl From<RustTableEvent> for MthTableEvent {
     fn from(value: RustTableEvent) -> Self {
         let mut event = Self::empty();
@@ -880,8 +1054,41 @@ pub struct MthPeerStatus {
     pub transcript_digest: [u8; 32],
 }
 
-/// ABI version and layout metadata returned across the C ABI.
-#[derive(Clone, Copy, Debug)]
+/// Legacy ABI 0.1 layout retained only for the calling convention of old symbols.
+///
+/// This type is intentionally absent from the current C header. ABI 0.2 hosts use
+/// [`MthAbiLayout`] with the versioned, size-aware layout functions instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct MthAbiLayoutV1 {
+    /// C ABI major version.
+    pub version_major: u32,
+    /// C ABI minor version.
+    pub version_minor: u32,
+    /// C ABI patch version.
+    pub version_patch: u32,
+    /// `sizeof(MthSessionConfig)` for the compiled Rust library.
+    pub session_config_size: usize,
+    /// `sizeof(MthTableConfig)` for the compiled Rust library.
+    pub table_config_size: usize,
+    /// `sizeof(MthBuffer)` for the compiled Rust library.
+    pub buffer_size: usize,
+    /// `sizeof(MthEffect)` for the compiled Rust library.
+    pub effect_size: usize,
+    /// `sizeof(MthTableEvent)` for the compiled Rust library.
+    pub table_event_size: usize,
+    /// `sizeof(MthPeerStatus)` for the compiled Rust library.
+    pub peer_status_size: usize,
+    /// `sizeof(MthAbiLayoutV1)` for an ABI 0.1 host.
+    pub abi_layout_size: usize,
+}
+
+/// ABI 0.2 version and layout metadata returned across the C ABI.
+///
+/// New fields are appended after the complete ABI 0.1 prefix. Hosts must use
+/// [`mth_abi_layout_v2`] and [`mth_abi_check_layout_v2`], which receive the caller's
+/// available byte count before reading or writing this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct MthAbiLayout {
     /// C ABI major version.
@@ -904,6 +1111,8 @@ pub struct MthAbiLayout {
     pub peer_status_size: usize,
     /// `sizeof(MthAbiLayout)` for the compiled Rust library.
     pub abi_layout_size: usize,
+    /// `sizeof(MthPeerEvent)` for the compiled Rust library.
+    pub peer_event_size: usize,
 }
 
 impl MthAbiLayout {
@@ -919,6 +1128,7 @@ impl MthAbiLayout {
             table_event_size: size_of::<MthTableEvent>(),
             peer_status_size: size_of::<MthPeerStatus>(),
             abi_layout_size: size_of::<MthAbiLayout>(),
+            peer_event_size: size_of::<MthPeerEvent>(),
         }
     }
 }
@@ -941,38 +1151,129 @@ pub const extern "C" fn mth_abi_version_patch() -> u32 {
     ABI_VERSION_PATCH
 }
 
-/// Copies ABI version and layout metadata into `out_layout`.
+/// Derives the canonical Ed25519 public key for one caller-supplied identity seed.
+///
+/// The function reads exactly [`MTH_IDENTITY_SEED_BYTES`] bytes and writes exactly
+/// [`MTH_IDENTITY_PUBLIC_KEY_BYTES`] bytes. It does not retain, generate, log, or
+/// otherwise export secret material.
 ///
 /// # Safety
 ///
-/// `out_layout` must be writable for one [`MthAbiLayout`] value when non-null.
+/// `seed_ptr` must be readable for `MTH_IDENTITY_SEED_BYTES` bytes and
+/// `out_public_key_ptr` must be writable for `MTH_IDENTITY_PUBLIC_KEY_BYTES` bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mth_abi_layout(out_layout: *mut MthAbiLayout) -> i32 {
+pub unsafe extern "C" fn mth_identity_public_from_seed(
+    seed_ptr: *const u8,
+    out_public_key_ptr: *mut u8,
+) -> i32 {
+    if seed_ptr.is_null() || out_public_key_ptr.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let seed = read_array::<MTH_IDENTITY_SEED_BYTES>(seed_ptr)?;
+        let public = IdentitySecret::from_seed(seed).public().to_bytes();
+        // SAFETY: Both pointers were checked for null and the caller guarantees the
+        // documented fixed-size readable and writable regions.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                public.as_ptr(),
+                out_public_key_ptr,
+                MTH_IDENTITY_PUBLIC_KEY_BYTES,
+            );
+        }
+        Ok::<(), Error>(())
+    })) {
+        Err(_) => store_global_panic(),
+        Ok(Err(error)) => store_global_error(&error),
+        Ok(Ok(())) => {
+            clear_global_error();
+            code(BoundaryErrorCode::Success)
+        }
+    }
+}
+
+/// Legacy ABI 0.1 layout query retained to reject old callers without overwriting them.
+///
+/// ABI 0.1 did not pass its output size, so an ABI 0.2 library cannot safely write its
+/// larger layout. A non-null call therefore returns [`MTH_ERROR_BUFFER_TOO_SMALL`] and
+/// leaves the caller's old layout untouched. Current hosts use [`mth_abi_layout_v2`].
+///
+/// # Safety
+///
+/// `out_layout` may be null or point to one writable ABI 0.1 layout value. This function
+/// never dereferences a non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_abi_layout(out_layout: *mut MthAbiLayoutV1) -> i32 {
     if out_layout.is_null() {
         return code(BoundaryErrorCode::NullPointer);
     }
-    // SAFETY: `out_layout` was checked for null and receives a plain C-compatible value.
+    code(BoundaryErrorCode::BufferTooSmall)
+}
+
+/// Legacy ABI 0.1 layout check retained with its original by-value calling convention.
+///
+/// An ABI 0.1 layout cannot describe the ABI 0.2 peer-event surface, so it is always
+/// rejected. Current hosts use [`mth_abi_check_layout_v2`].
+#[unsafe(no_mangle)]
+pub const extern "C" fn mth_abi_check_layout(_layout: MthAbiLayoutV1) -> i32 {
+    MTH_ERROR_INVALID_ARGUMENT
+}
+
+/// Copies ABI 0.2 version and layout metadata into a size-qualified output buffer.
+///
+/// The function writes nothing unless `out_layout_size` is at least
+/// `size_of::<MthAbiLayout>()`, preventing a newer library from overflowing an older
+/// caller's smaller layout.
+///
+/// # Safety
+///
+/// `out_layout` must be null or writable for `out_layout_size` bytes. When the byte count
+/// is large enough, the pointer must also satisfy [`MthAbiLayout`]'s alignment.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_abi_layout_v2(
+    out_layout: *mut MthAbiLayout,
+    out_layout_size: usize,
+) -> i32 {
+    if out_layout.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    if out_layout_size < size_of::<MthAbiLayout>() {
+        return code(BoundaryErrorCode::BufferTooSmall);
+    }
+    // SAFETY: The pointer and byte count satisfy the function's caller contract, and the
+    // size check above prevents writing beyond the provided region.
     unsafe {
-        *out_layout = MthAbiLayout::current();
+        out_layout.write(MthAbiLayout::current());
     }
     code(BoundaryErrorCode::Success)
 }
 
-/// Checks that a host compiled against the same ABI version and struct sizes.
+/// Checks ABI 0.2 layout metadata through a size-qualified input pointer.
+///
+/// The function reads nothing unless `layout_size` is at least
+/// `size_of::<MthAbiLayout>()`, preventing a newer library from reading beyond an older
+/// caller's smaller layout.
+///
+/// # Safety
+///
+/// `layout` must be null or readable for `layout_size` bytes. When the byte count is large
+/// enough, the pointer must also satisfy [`MthAbiLayout`]'s alignment.
 #[unsafe(no_mangle)]
-pub const extern "C" fn mth_abi_check_layout(layout: MthAbiLayout) -> i32 {
+pub unsafe extern "C" fn mth_abi_check_layout_v2(
+    layout: *const MthAbiLayout,
+    layout_size: usize,
+) -> i32 {
+    if layout.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    if layout_size < size_of::<MthAbiLayout>() {
+        return code(BoundaryErrorCode::BufferTooSmall);
+    }
+    // SAFETY: The pointer and byte count satisfy the function's caller contract, and the
+    // size check above prevents reading beyond the provided region.
+    let layout = unsafe { layout.read() };
     let current = MthAbiLayout::current();
-    if layout.version_major != current.version_major
-        || layout.version_minor != current.version_minor
-        || layout.version_patch != current.version_patch
-        || layout.session_config_size != current.session_config_size
-        || layout.table_config_size != current.table_config_size
-        || layout.buffer_size != current.buffer_size
-        || layout.effect_size != current.effect_size
-        || layout.table_event_size != current.table_event_size
-        || layout.peer_status_size != current.peer_status_size
-        || layout.abi_layout_size != current.abi_layout_size
-    {
+    if layout != current {
         return MTH_ERROR_INVALID_ARGUMENT;
     }
     MTH_ERROR_SUCCESS
@@ -1005,12 +1306,30 @@ pub unsafe extern "C" fn mth_buffer_free(buffer: MthBuffer) {
 /// have been freed before. Callers must preserve embedded buffer fields exactly.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mth_effect_free(effect: MthEffect) {
-    // SAFETY: The caller's contract for this effect also covers both embedded
+    // SAFETY: The caller's contract for this effect also covers all embedded
     // buffers, which were allocated by this library and have not been freed before.
     unsafe {
         mth_buffer_free(effect.artifact);
         mth_buffer_free(effect.checkpoint);
         mth_buffer_free(effect.final_stacks);
+    }
+}
+
+/// Frees owned buffers inside a peer presentation event returned by this library.
+///
+/// # Safety
+///
+/// `event` must be a live event returned by this library, and it must not have
+/// been freed before. Callers must preserve every embedded buffer exactly.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_peer_event_free(event: MthPeerEvent) {
+    // SAFETY: The caller's contract covers every embedded Rust allocation.
+    unsafe {
+        mth_buffer_free(event.stacks);
+        mth_buffer_free(event.board_cards);
+        mth_buffer_free(event.local_hole_cards);
+        mth_buffer_free(event.showdown_rows);
+        mth_buffer_free(event.final_stacks);
     }
 }
 
@@ -1480,6 +1799,51 @@ pub unsafe extern "C" fn mth_peer_session_next_effect(
     }
 }
 
+/// Pops the next verified player-visible presentation event into `out_event`.
+///
+/// `NoEffect` means the presentation queue is empty and is not a protocol failure.
+/// On success, the caller owns the returned event and must release it with
+/// [`mth_peer_event_free`]. This queue is independent from host effects.
+///
+/// # Safety
+///
+/// `handle` must be null or a live peer-session pointer returned by this library.
+/// `out_event` must be writable for one [`MthPeerEvent`] value when non-null. Calls
+/// using the same handle must be serialized by the host.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mth_peer_session_next_presentation_event(
+    handle: *mut MthPeerSession,
+    out_event: *mut MthPeerEvent,
+) -> i32 {
+    if out_event.is_null() {
+        return code(BoundaryErrorCode::NullPointer);
+    }
+    let Some(handle) = checked_handle(handle) else {
+        return code(BoundaryErrorCode::NullPointer);
+    };
+    match catch_unwind(AssertUnwindSafe(|| {
+        if handle.pending_presentation_events.is_empty() {
+            match encode_presentation_events(handle.session.drain_presentation_events()) {
+                Ok(events) => handle.pending_presentation_events.extend(events),
+                Err(error) => return store_error(handle, &error),
+            }
+        }
+        let Some(event) = handle.pending_presentation_events.pop_front() else {
+            return code(BoundaryErrorCode::NoEffect);
+        };
+        // SAFETY: `out_event` was checked for null and receives a plain C-compatible value.
+        unsafe {
+            *out_event = event.into();
+        }
+        handle.last_error.clear();
+        clear_global_error();
+        code(BoundaryErrorCode::Success)
+    })) {
+        Ok(status) => status,
+        Err(_) => store_panic(handle),
+    }
+}
+
 /// Copies the last error message for this handle into a caller-owned buffer.
 ///
 /// # Safety
@@ -1552,13 +1916,13 @@ fn build_session(
         config.roster_public_keys_ptr,
         config
             .player_count
-            .checked_mul(IDENTITY_PUBLIC_KEY_BYTES)
+            .checked_mul(MTH_IDENTITY_PUBLIC_KEY_BYTES)
             .ok_or_else(|| mental_card_core::error::configuration("roster byte length overflow"))?,
     )?;
     let identities = keys
-        .chunks_exact(IDENTITY_PUBLIC_KEY_BYTES)
+        .chunks_exact(MTH_IDENTITY_PUBLIC_KEY_BYTES)
         .map(|chunk| {
-            let mut key = [0_u8; IDENTITY_PUBLIC_KEY_BYTES];
+            let mut key = [0_u8; MTH_IDENTITY_PUBLIC_KEY_BYTES];
             key.copy_from_slice(chunk);
             IdentityPublic::from_bytes(key)
         })
@@ -1580,7 +1944,9 @@ fn build_session(
     .economics(economics)
     .timeout_millis(config.timeout_millis)
     .build()?;
-    let identity = IdentitySecret::from_seed(read_array::<32>(local_identity_seed_ptr)?);
+    let identity = IdentitySecret::from_seed(read_array::<MTH_IDENTITY_SEED_BYTES>(
+        local_identity_seed_ptr,
+    )?);
     let session = PeerSession::new(
         session_config,
         identity,
@@ -1591,6 +1957,7 @@ fn build_session(
         session,
         rng: OsRng,
         pending_effects: VecDeque::new(),
+        pending_presentation_events: VecDeque::new(),
         last_error: Vec::new(),
     })
 }
@@ -2256,6 +2623,16 @@ fn encode_showdown_rows(showdown: &TableShowdown) -> Vec<u8> {
     bytes
 }
 
+fn encode_boundary_showdown_rows(showdown: &[BoundaryOpenedShowdownHand]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(showdown.len() * 4);
+    for hand in showdown {
+        bytes.push(hand.seat());
+        bytes.extend(hand.hole_cards());
+        bytes.push(hand.category());
+    }
+    bytes
+}
+
 fn shuffled_deck(rng: &mut StdRng) -> Vec<Card> {
     let mut deck = Vec::with_capacity(52);
     for suit in [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades] {
@@ -2479,6 +2856,17 @@ const fn boundary_effect_kind_code(value: BoundaryEffectKind) -> u32 {
     }
 }
 
+const fn boundary_presentation_event_kind_code(value: BoundaryPresentationEventKind) -> u32 {
+    match value {
+        BoundaryPresentationEventKind::HandStarted => 1,
+        BoundaryPresentationEventKind::LocalHoleCardsOpened => 2,
+        BoundaryPresentationEventKind::BettingActionAccepted => 3,
+        BoundaryPresentationEventKind::BoardStreetOpened => 4,
+        BoundaryPresentationEventKind::ShowdownHandOpened => 5,
+        BoundaryPresentationEventKind::HandFinished => 6,
+    }
+}
+
 const fn boundary_peer_phase_code(value: BoundaryPeerPhase) -> u32 {
     match value {
         BoundaryPeerPhase::KeySetup => 1,
@@ -2503,6 +2891,41 @@ mod tests {
         assert_eq!(mth_abi_version_major(), ABI_VERSION_MAJOR);
         assert_eq!(mth_abi_version_minor(), ABI_VERSION_MINOR);
         assert_eq!(mth_abi_version_patch(), ABI_VERSION_PATCH);
+    }
+
+    #[test]
+    fn identity_public_derivation_matches_rfc_8032_vector_and_rejects_nulls() {
+        let seed = [
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
+            0x1c, 0xae, 0x7f, 0x60,
+        ];
+        let expected = [
+            0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64,
+            0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68,
+            0xf7, 0x07, 0x51, 0x1a,
+        ];
+        let mut public = [0xaa; MTH_IDENTITY_PUBLIC_KEY_BYTES];
+
+        assert_eq!(
+            // SAFETY: Both fixed-size arrays satisfy the function's pointer contract.
+            unsafe { mth_identity_public_from_seed(seed.as_ptr(), public.as_mut_ptr()) },
+            MTH_ERROR_SUCCESS
+        );
+        assert_eq!(public, expected);
+
+        public.fill(0xaa);
+        assert_eq!(
+            // SAFETY: This intentionally supplies a null input pointer.
+            unsafe { mth_identity_public_from_seed(ptr::null(), public.as_mut_ptr()) },
+            MTH_ERROR_NULL_POINTER
+        );
+        assert_eq!(public, [0xaa; MTH_IDENTITY_PUBLIC_KEY_BYTES]);
+        assert_eq!(
+            // SAFETY: This intentionally supplies a null output pointer.
+            unsafe { mth_identity_public_from_seed(seed.as_ptr(), ptr::null_mut()) },
+            MTH_ERROR_NULL_POINTER
+        );
     }
 
     #[test]
@@ -2586,6 +3009,39 @@ mod tests {
             boundary_effect_kind_code(BoundaryEffectKind::Finished)
         );
 
+        assert_eq!(MTH_IDENTITY_SEED_BYTES, 32);
+        assert_eq!(MTH_IDENTITY_PUBLIC_KEY_BYTES, 32);
+        assert_eq!(
+            MTH_PEER_EVENT_HAND_STARTED,
+            boundary_presentation_event_kind_code(BoundaryPresentationEventKind::HandStarted)
+        );
+        assert_eq!(
+            MTH_PEER_EVENT_LOCAL_HOLE_CARDS_OPENED,
+            boundary_presentation_event_kind_code(
+                BoundaryPresentationEventKind::LocalHoleCardsOpened
+            )
+        );
+        assert_eq!(
+            MTH_PEER_EVENT_BETTING_ACTION_ACCEPTED,
+            boundary_presentation_event_kind_code(
+                BoundaryPresentationEventKind::BettingActionAccepted
+            )
+        );
+        assert_eq!(
+            MTH_PEER_EVENT_BOARD_STREET_OPENED,
+            boundary_presentation_event_kind_code(BoundaryPresentationEventKind::BoardStreetOpened)
+        );
+        assert_eq!(
+            MTH_PEER_EVENT_SHOWDOWN_HAND_OPENED,
+            boundary_presentation_event_kind_code(
+                BoundaryPresentationEventKind::ShowdownHandOpened
+            )
+        );
+        assert_eq!(
+            MTH_PEER_EVENT_HAND_FINISHED,
+            boundary_presentation_event_kind_code(BoundaryPresentationEventKind::HandFinished)
+        );
+
         assert_eq!(
             MTH_PHASE_KEY_SETUP,
             boundary_peer_phase_code(BoundaryPeerPhase::KeySetup)
@@ -2621,7 +3077,7 @@ mod tests {
     }
 
     #[test]
-    fn abi_layout_reports_and_checks_current_struct_sizes() {
+    fn abi_layout_v2_reports_and_checks_current_struct_sizes() {
         let mut layout = MthAbiLayout {
             version_major: 0,
             version_minor: 0,
@@ -2633,11 +3089,12 @@ mod tests {
             table_event_size: 0,
             peer_status_size: 0,
             abi_layout_size: 0,
+            peer_event_size: 0,
         };
 
         assert_eq!(
-            // SAFETY: `layout` is a valid out pointer for one `MthAbiLayout` value.
-            unsafe { mth_abi_layout(&raw mut layout) },
+            // SAFETY: `layout` is writable for the supplied byte count.
+            unsafe { mth_abi_layout_v2(&raw mut layout, size_of::<MthAbiLayout>()) },
             code(BoundaryErrorCode::Success)
         );
         assert_eq!(layout.version_major, ABI_VERSION_MAJOR);
@@ -2650,18 +3107,93 @@ mod tests {
         assert_eq!(layout.table_event_size, size_of::<MthTableEvent>());
         assert_eq!(layout.peer_status_size, size_of::<MthPeerStatus>());
         assert_eq!(layout.abi_layout_size, size_of::<MthAbiLayout>());
+        assert_eq!(layout.peer_event_size, size_of::<MthPeerEvent>());
         assert_eq!(
-            mth_abi_check_layout(layout),
+            // SAFETY: `layout` is readable for the supplied byte count.
+            unsafe { mth_abi_check_layout_v2(&raw const layout, size_of::<MthAbiLayout>()) },
             code(BoundaryErrorCode::Success)
         );
 
-        layout.effect_size += 1;
+        layout.peer_event_size += 1;
         assert_eq!(
-            mth_abi_check_layout(layout),
+            // SAFETY: `layout` is readable for the supplied byte count.
+            unsafe { mth_abi_check_layout_v2(&raw const layout, size_of::<MthAbiLayout>()) },
             code(BoundaryErrorCode::InvalidArgument)
         );
         assert_eq!(
-            // SAFETY: This intentionally passes a null out pointer to verify the error code.
+            // SAFETY: This intentionally passes a null output pointer.
+            unsafe { mth_abi_layout_v2(ptr::null_mut(), size_of::<MthAbiLayout>()) },
+            code(BoundaryErrorCode::NullPointer)
+        );
+        assert_eq!(
+            // SAFETY: This intentionally passes a null input pointer.
+            unsafe { mth_abi_check_layout_v2(ptr::null(), size_of::<MthAbiLayout>()) },
+            code(BoundaryErrorCode::NullPointer)
+        );
+    }
+
+    #[test]
+    fn old_and_undersized_abi_layout_buffers_are_rejected_without_access() {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(C)]
+        struct GuardedLayoutV1 {
+            layout: MthAbiLayoutV1,
+            canary: [u8; 32],
+        }
+
+        assert!(size_of::<MthAbiLayoutV1>() < size_of::<MthAbiLayout>());
+        let mut guarded = GuardedLayoutV1 {
+            layout: MthAbiLayoutV1 {
+                version_major: 0,
+                version_minor: 1,
+                version_patch: 0,
+                session_config_size: size_of::<MthSessionConfig>(),
+                table_config_size: size_of::<MthTableConfig>(),
+                buffer_size: size_of::<MthBuffer>(),
+                effect_size: size_of::<MthEffect>(),
+                table_event_size: size_of::<MthTableEvent>(),
+                peer_status_size: size_of::<MthPeerStatus>(),
+                abi_layout_size: size_of::<MthAbiLayoutV1>(),
+            },
+            canary: [0xa5; 32],
+        };
+        let original = guarded;
+
+        assert_eq!(
+            // SAFETY: The legacy function never dereferences a non-null pointer.
+            unsafe { mth_abi_layout(&raw mut guarded.layout) },
+            code(BoundaryErrorCode::BufferTooSmall)
+        );
+        assert_eq!(guarded, original);
+        assert_eq!(
+            mth_abi_check_layout(guarded.layout),
+            code(BoundaryErrorCode::InvalidArgument)
+        );
+
+        assert_eq!(
+            // SAFETY: The size check rejects this ABI 0.1-sized region before writing it.
+            unsafe {
+                mth_abi_layout_v2(
+                    (&raw mut guarded.layout).cast(),
+                    size_of::<MthAbiLayoutV1>(),
+                )
+            },
+            code(BoundaryErrorCode::BufferTooSmall)
+        );
+        assert_eq!(guarded, original);
+        assert_eq!(
+            // SAFETY: The size check rejects this ABI 0.1-sized region before reading it.
+            unsafe {
+                mth_abi_check_layout_v2(
+                    (&raw const guarded.layout).cast(),
+                    size_of::<MthAbiLayoutV1>(),
+                )
+            },
+            code(BoundaryErrorCode::BufferTooSmall)
+        );
+        assert_eq!(guarded, original);
+        assert_eq!(
+            // SAFETY: This intentionally passes a null legacy output pointer.
             unsafe { mth_abi_layout(ptr::null_mut()) },
             code(BoundaryErrorCode::NullPointer)
         );
@@ -3184,6 +3716,49 @@ mod tests {
             }
             Self { handles }
         }
+    }
+
+    #[test]
+    fn peer_presentation_poll_returns_owned_initial_snapshot_and_no_effect() {
+        let sessions = FfiSessions::standard_three_player();
+        let handle = sessions.handles[0];
+        let mut event = MthPeerEvent::empty();
+
+        assert_eq!(
+            // SAFETY: `handle` is live and `event` is a valid out pointer.
+            unsafe { mth_peer_session_next_presentation_event(handle, &raw mut event) },
+            MTH_ERROR_SUCCESS
+        );
+        assert_eq!(event.kind, MTH_PEER_EVENT_HAND_STARTED);
+        assert_eq!(event.hand, 1);
+        assert_eq!(event.phase, MTH_PHASE_KEY_SETUP);
+        assert_eq!(event.local_seat, 0);
+        assert_eq!(event.small_blind_units, 1);
+        assert_eq!(event.big_blind_units, 2);
+        assert_eq!(event.pot_units, 0);
+        assert_eq!(decode_u64_buffer(event.stacks), vec![100, 100, 100]);
+        assert!(copy_buffer(event.board_cards).is_empty());
+        assert!(copy_buffer(event.local_hole_cards).is_empty());
+        assert!(copy_buffer(event.showdown_rows).is_empty());
+        assert!(copy_buffer(event.final_stacks).is_empty());
+        // SAFETY: This event was returned successfully and is freed exactly once.
+        unsafe {
+            mth_peer_event_free(event);
+        }
+
+        let mut sentinel = MthPeerEvent::empty();
+        sentinel.kind = u32::MAX;
+        assert_eq!(
+            // SAFETY: `handle` is live and `sentinel` is a valid out pointer.
+            unsafe { mth_peer_session_next_presentation_event(handle, &raw mut sentinel) },
+            MTH_ERROR_NO_EFFECT
+        );
+        assert_eq!(sentinel.kind, u32::MAX);
+        assert_eq!(
+            // SAFETY: This intentionally passes a null out pointer.
+            unsafe { mth_peer_session_next_presentation_event(handle, ptr::null_mut()) },
+            MTH_ERROR_NULL_POINTER
+        );
     }
 
     fn copy_buffer(buffer: MthBuffer) -> Vec<u8> {

@@ -69,11 +69,30 @@ fn target_profile_dir(manifest_dir: &Path) -> PathBuf {
 const HEADER_SMOKE_CPP: &str = r#"
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include "mtholdem.h"
 
+struct LegacyMthAbiLayoutV1 {
+    uint32_t version_major;
+    uint32_t version_minor;
+    uint32_t version_patch;
+    size_t session_config_size;
+    size_t table_config_size;
+    size_t buffer_size;
+    size_t effect_size;
+    size_t table_event_size;
+    size_t peer_status_size;
+    size_t abi_layout_size;
+};
+
+extern "C" int32_t mth_abi_layout(LegacyMthAbiLayoutV1 *out_layout);
+extern "C" int32_t mth_abi_check_layout(LegacyMthAbiLayoutV1 layout);
+
 static_assert(MTH_ABI_VERSION_MAJOR == 0u);
-static_assert(MTH_ABI_VERSION_MINOR == 1u);
+static_assert(MTH_ABI_VERSION_MINOR == 2u);
 static_assert(MTH_ABI_VERSION_PATCH == 0u);
+static_assert(MTH_IDENTITY_SEED_BYTES == 32u);
+static_assert(MTH_IDENTITY_PUBLIC_KEY_BYTES == 32u);
 
 static_assert(MTH_ERROR_SUCCESS == 0);
 static_assert(MTH_ERROR_NULL_POINTER == 1);
@@ -103,6 +122,13 @@ static_assert(MTH_EFFECT_SUBMIT_RECOVERY == 5u);
 static_assert(MTH_EFFECT_PUBLISH_SHOWDOWN_BUNDLE == 6u);
 static_assert(MTH_EFFECT_FINISHED == 7u);
 
+static_assert(MTH_PEER_EVENT_HAND_STARTED == 1u);
+static_assert(MTH_PEER_EVENT_LOCAL_HOLE_CARDS_OPENED == 2u);
+static_assert(MTH_PEER_EVENT_BETTING_ACTION_ACCEPTED == 3u);
+static_assert(MTH_PEER_EVENT_BOARD_STREET_OPENED == 4u);
+static_assert(MTH_PEER_EVENT_SHOWDOWN_HAND_OPENED == 5u);
+static_assert(MTH_PEER_EVENT_HAND_FINISHED == 6u);
+
 static_assert(MTH_PHASE_KEY_SETUP == 1u);
 static_assert(MTH_PHASE_SHUFFLE == 2u);
 static_assert(MTH_PHASE_PRIVATE_REVEAL == 3u);
@@ -130,6 +156,8 @@ static_assert(MTH_BOT_PRESET_LOOSE_PASSIVE == 3u);
 static_assert(MTH_BOT_PRESET_LAG == 4u);
 static_assert(MTH_BOT_PRESET_MANIAC == 5u);
 
+static_assert(offsetof(MthAbiLayout, peer_event_size) == sizeof(LegacyMthAbiLayoutV1));
+
 int main() {
     if (mth_abi_version_major() != MTH_ABI_VERSION_MAJOR) {
         return 1;
@@ -152,26 +180,114 @@ int main() {
         sizeof(MthTableEvent),
         sizeof(MthPeerStatus),
         sizeof(MthAbiLayout),
+        sizeof(MthPeerEvent),
     };
-    if (mth_abi_check_layout(layout) != MTH_ERROR_SUCCESS) {
+    if (mth_abi_check_layout_v2(&layout, sizeof(layout)) != MTH_ERROR_SUCCESS) {
         return 4;
     }
 
     MthAbiLayout reported = {};
-    if (mth_abi_layout(&reported) != MTH_ERROR_SUCCESS) {
+    if (mth_abi_layout_v2(&reported, sizeof(reported)) != MTH_ERROR_SUCCESS) {
         return 5;
     }
-    if (reported.effect_size != sizeof(MthEffect)) {
+    if (reported.peer_event_size != sizeof(MthPeerEvent)) {
         return 6;
     }
 
-    layout.effect_size += 1;
-    if (mth_abi_check_layout(layout) != MTH_ERROR_INVALID_ARGUMENT) {
+    layout.peer_event_size += 1;
+    if (mth_abi_check_layout_v2(&layout, sizeof(layout)) != MTH_ERROR_INVALID_ARGUMENT) {
         return 7;
     }
-    if (mth_abi_layout(nullptr) != MTH_ERROR_NULL_POINTER) {
+    if (mth_abi_layout_v2(nullptr, sizeof(MthAbiLayout)) != MTH_ERROR_NULL_POINTER) {
         return 8;
     }
+    if (mth_abi_check_layout_v2(nullptr, sizeof(MthAbiLayout)) != MTH_ERROR_NULL_POINTER) {
+        return 9;
+    }
+
+    struct GuardedLegacyLayout {
+        LegacyMthAbiLayoutV1 layout;
+        uint8_t canary[32];
+    };
+    GuardedLegacyLayout legacy = {
+        {
+            0u,
+            1u,
+            0u,
+            sizeof(MthSessionConfig),
+            sizeof(MthTableConfig),
+            sizeof(MthBuffer),
+            sizeof(MthEffect),
+            sizeof(MthTableEvent),
+            sizeof(MthPeerStatus),
+            sizeof(LegacyMthAbiLayoutV1),
+        },
+        {},
+    };
+    for (uint8_t &byte : legacy.canary) {
+        byte = 0xa5u;
+    }
+    const GuardedLegacyLayout original_legacy = legacy;
+
+    if (mth_abi_layout(&legacy.layout) != MTH_ERROR_BUFFER_TOO_SMALL) {
+        return 10;
+    }
+    if (std::memcmp(&legacy, &original_legacy, sizeof(legacy)) != 0) {
+        return 11;
+    }
+    if (mth_abi_check_layout(legacy.layout) != MTH_ERROR_INVALID_ARGUMENT) {
+        return 12;
+    }
+    if (mth_abi_layout_v2(
+            reinterpret_cast<MthAbiLayout *>(&legacy.layout),
+            sizeof(legacy.layout)) != MTH_ERROR_BUFFER_TOO_SMALL) {
+        return 13;
+    }
+    if (std::memcmp(&legacy, &original_legacy, sizeof(legacy)) != 0) {
+        return 14;
+    }
+    if (mth_abi_check_layout_v2(
+            reinterpret_cast<const MthAbiLayout *>(&legacy.layout),
+            sizeof(legacy.layout)) != MTH_ERROR_BUFFER_TOO_SMALL) {
+        return 15;
+    }
+    if (std::memcmp(&legacy, &original_legacy, sizeof(legacy)) != 0) {
+        return 16;
+    }
+
+    const uint8_t identity_seed[MTH_IDENTITY_SEED_BYTES] = {
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+        0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+    };
+    const uint8_t expected_public[MTH_IDENTITY_PUBLIC_KEY_BYTES] = {
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+        0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+        0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+        0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+    };
+    uint8_t public_key[MTH_IDENTITY_PUBLIC_KEY_BYTES] = {};
+    if (mth_identity_public_from_seed(identity_seed, public_key) != MTH_ERROR_SUCCESS) {
+        return 17;
+    }
+    for (size_t index = 0; index < MTH_IDENTITY_PUBLIC_KEY_BYTES; ++index) {
+        if (public_key[index] != expected_public[index]) {
+            return 18;
+        }
+    }
+    if (mth_identity_public_from_seed(nullptr, public_key) != MTH_ERROR_NULL_POINTER) {
+        return 19;
+    }
+    if (mth_identity_public_from_seed(identity_seed, nullptr) != MTH_ERROR_NULL_POINTER) {
+        return 20;
+    }
+
+    MthPeerEvent event = {};
+    if (mth_peer_session_next_presentation_event(nullptr, &event) != MTH_ERROR_NULL_POINTER) {
+        return 21;
+    }
+    mth_peer_event_free(event);
     return 0;
 }
 "#;

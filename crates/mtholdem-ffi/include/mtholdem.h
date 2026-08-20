@@ -10,8 +10,11 @@ extern "C" {
 #endif
 
 #define MTH_ABI_VERSION_MAJOR 0u
-#define MTH_ABI_VERSION_MINOR 1u
+#define MTH_ABI_VERSION_MINOR 2u
 #define MTH_ABI_VERSION_PATCH 0u
+
+#define MTH_IDENTITY_SEED_BYTES 32u
+#define MTH_IDENTITY_PUBLIC_KEY_BYTES 32u
 
 #define MTH_ERROR_SUCCESS 0
 #define MTH_ERROR_NULL_POINTER 1
@@ -40,6 +43,13 @@ extern "C" {
 #define MTH_EFFECT_SUBMIT_RECOVERY 5u
 #define MTH_EFFECT_PUBLISH_SHOWDOWN_BUNDLE 6u
 #define MTH_EFFECT_FINISHED 7u
+
+#define MTH_PEER_EVENT_HAND_STARTED 1u
+#define MTH_PEER_EVENT_LOCAL_HOLE_CARDS_OPENED 2u
+#define MTH_PEER_EVENT_BETTING_ACTION_ACCEPTED 3u
+#define MTH_PEER_EVENT_BOARD_STREET_OPENED 4u
+#define MTH_PEER_EVENT_SHOWDOWN_HAND_OPENED 5u
+#define MTH_PEER_EVENT_HAND_FINISHED 6u
 
 #define MTH_PHASE_KEY_SETUP 1u
 #define MTH_PHASE_SHUFFLE 2u
@@ -149,6 +159,40 @@ typedef struct MthEffect {
     uint64_t finished_hand;
 } MthEffect;
 
+typedef struct MthPeerEvent {
+    uint32_t kind;
+    uint64_t hand;
+    uint32_t phase;
+    uint8_t local_seat;
+    uint8_t button_seat;
+    bool has_street;
+    uint32_t street;
+    bool has_next_actor;
+    uint8_t next_actor;
+    uint64_t small_blind_units;
+    uint64_t big_blind_units;
+    uint64_t pot_units;
+    bool has_accepted_action;
+    uint8_t action_actor;
+    uint32_t action_street;
+    uint32_t action_kind;
+    uint64_t raise_to_units;
+    bool has_opened_street;
+    uint32_t opened_street;
+    bool has_showdown_seat;
+    uint8_t showdown_seat;
+    /* Current stacks as little-endian u64 chip units in seat order. */
+    MthBuffer stacks;
+    /* Opened board cards as standard card indices. */
+    MthBuffer board_cards;
+    /* Only the local peer's two private cards as standard card indices. */
+    MthBuffer local_hole_cards;
+    /* Verified rows: seat, first card, second card, category. */
+    MthBuffer showdown_rows;
+    /* Final stacks as little-endian u64 chip units after completion. */
+    MthBuffer final_stacks;
+} MthPeerEvent;
+
 typedef struct MthTableEvent {
     uint32_t kind;
     uint32_t backend;
@@ -214,17 +258,30 @@ typedef struct MthAbiLayout {
     size_t table_event_size;
     size_t peer_status_size;
     size_t abi_layout_size;
+    /* ABI 0.2 extension; preceding fields preserve the complete ABI 0.1 prefix. */
+    size_t peer_event_size;
 } MthAbiLayout;
 
 uint32_t mth_abi_version_major(void);
 uint32_t mth_abi_version_minor(void);
 uint32_t mth_abi_version_patch(void);
 
-int32_t mth_abi_layout(MthAbiLayout *out_layout);
-int32_t mth_abi_check_layout(MthAbiLayout layout);
+int32_t mth_identity_public_from_seed(
+    const uint8_t *seed_ptr,
+    uint8_t *out_public_key_ptr);
+
+/* ABI 0.2 layout operations are versioned and size-qualified. They do not
+ * write or read the layout when layout_size is smaller than sizeof(MthAbiLayout). */
+int32_t mth_abi_layout_v2(
+    MthAbiLayout *out_layout,
+    size_t out_layout_size);
+int32_t mth_abi_check_layout_v2(
+    const MthAbiLayout *layout,
+    size_t layout_size);
 
 void mth_buffer_free(MthBuffer buffer);
 void mth_effect_free(MthEffect effect);
+void mth_peer_event_free(MthPeerEvent event);
 void mth_table_event_free(MthTableEvent event);
 
 int32_t mth_table_session_new(
@@ -306,6 +363,10 @@ int32_t mth_peer_session_status(
 int32_t mth_peer_session_next_effect(
     MthPeerSession *handle,
     MthEffect *out_effect);
+
+int32_t mth_peer_session_next_presentation_event(
+    MthPeerSession *handle,
+    MthPeerEvent *out_event);
 
 int32_t mth_peer_session_last_error(
     MthPeerSession *handle,

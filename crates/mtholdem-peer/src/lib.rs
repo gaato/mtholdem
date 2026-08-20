@@ -18,6 +18,7 @@ use mental_card_core::crypto::{MentalKeyShare, RevealShare, RevealShareProof};
 use mental_card_core::error::{Result, protocol};
 use mental_card_core::identity::IdentitySecret;
 use mtholdem::betting::{ActionContext, BetAction, LegalActions, Street};
+use mtholdem::card::evaluate_best;
 use mtholdem::checkpoint::{
     CertifiedCheckpoint, CheckpointState, CheckpointVote, HoleCardReceipts, OpenBoardCard,
 };
@@ -30,7 +31,7 @@ use mtholdem::transcript::{PublicTranscript, TranscriptAnchor};
 use mtholdem::wire::{
     HandPhase, PublicPayload, ShowdownBundle, SignedPrivateReveal, SignedPublicMessage,
 };
-use mtholdem::{Card, CardPosition, Chips, Digest32, HandNumber, Seat};
+use mtholdem::{Card, CardPosition, Chips, Digest32, HandCategory, HandNumber, Seat};
 use rand::{CryptoRng, RngCore};
 
 /// An action the host application must perform outside the protocol crate.
@@ -155,6 +156,199 @@ pub struct PeerStatus {
     transcript_anchor: TranscriptAnchor,
 }
 
+/// One cryptographically opened showdown row visible to the local peer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OpenedShowdownHand {
+    seat: Seat,
+    hole_cards: [Card; 2],
+    category: HandCategory,
+}
+
+impl OpenedShowdownHand {
+    /// Returns the disclosed seat.
+    #[must_use]
+    pub const fn seat(self) -> Seat {
+        self.seat
+    }
+
+    /// Returns the verified disclosed hole cards.
+    #[must_use]
+    pub const fn hole_cards(self) -> [Card; 2] {
+        self.hole_cards
+    }
+
+    /// Returns the best five-card category for the disclosed hand and board.
+    #[must_use]
+    pub const fn category(self) -> HandCategory {
+        self.category
+    }
+}
+
+/// Complete player-visible state after one verified peer transition.
+///
+/// The snapshot contains only the local peer's private cards. Opponent cards enter
+/// `showdown_hands` only after their signed public commitment, side bundle, earlier
+/// private-card receipt, and cryptographic reveal shares have all been verified.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PresentationSnapshot {
+    hand: HandNumber,
+    phase: PeerPhase,
+    local_seat: Seat,
+    button: Seat,
+    street: Option<Street>,
+    next_actor: Option<Seat>,
+    small_blind: Chips,
+    big_blind: Chips,
+    pot: Chips,
+    stacks: Vec<Chips>,
+    board: Vec<Card>,
+    local_hole_cards: Option<[Card; 2]>,
+    showdown_hands: Vec<OpenedShowdownHand>,
+    final_stacks: Option<Vec<Chips>>,
+}
+
+impl PresentationSnapshot {
+    /// Returns the current hand number.
+    #[must_use]
+    pub const fn hand(&self) -> HandNumber {
+        self.hand
+    }
+
+    /// Returns the verified peer phase after the transition.
+    #[must_use]
+    pub const fn phase(&self) -> PeerPhase {
+        self.phase
+    }
+
+    /// Returns the seat whose local view this snapshot represents.
+    #[must_use]
+    pub const fn local_seat(&self) -> Seat {
+        self.local_seat
+    }
+
+    /// Returns the dealer button seat.
+    #[must_use]
+    pub const fn button(&self) -> Seat {
+        self.button
+    }
+
+    /// Returns the active betting street, when the phase is betting.
+    #[must_use]
+    pub const fn street(&self) -> Option<Street> {
+        self.street
+    }
+
+    /// Returns the next betting actor, when an action is currently expected.
+    #[must_use]
+    pub const fn next_actor(&self) -> Option<Seat> {
+        self.next_actor
+    }
+
+    /// Returns the configured small blind.
+    #[must_use]
+    pub const fn small_blind(&self) -> Chips {
+        self.small_blind
+    }
+
+    /// Returns the configured big blind.
+    #[must_use]
+    pub const fn big_blind(&self) -> Chips {
+        self.big_blind
+    }
+
+    /// Returns the current unsettled pot, or zero after hand completion.
+    #[must_use]
+    pub const fn pot(&self) -> Chips {
+        self.pot
+    }
+
+    /// Returns current stacks in table seat order.
+    #[must_use]
+    pub fn stacks(&self) -> &[Chips] {
+        &self.stacks
+    }
+
+    /// Returns opened board cards in street order.
+    #[must_use]
+    pub fn board(&self) -> &[Card] {
+        &self.board
+    }
+
+    /// Returns only this peer's private hole cards, once verified locally.
+    #[must_use]
+    pub const fn local_hole_cards(&self) -> Option<[Card; 2]> {
+        self.local_hole_cards
+    }
+
+    /// Returns cryptographically opened showdown rows in seat order.
+    #[must_use]
+    pub fn showdown_hands(&self) -> &[OpenedShowdownHand] {
+        &self.showdown_hands
+    }
+
+    /// Returns final stacks only after the peer reaches the complete phase.
+    #[must_use]
+    pub fn final_stacks(&self) -> Option<&[Chips]> {
+        self.final_stacks.as_deref()
+    }
+}
+
+/// Player-visible events derived from accepted peer transitions.
+///
+/// These events are deliberately separate from [`HostEffect`]. They describe immutable
+/// local presentation state; they never ask the host to transport, persist, or settle an
+/// artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PresentationEvent {
+    /// A validated peer session was created for one hand.
+    HandStarted(PresentationSnapshot),
+    /// The local peer cryptographically opened its private hole cards.
+    LocalHoleCardsOpened(PresentationSnapshot),
+    /// A signed betting action passed transcript and rules validation.
+    BettingActionAccepted {
+        /// Complete local state after applying the action.
+        snapshot: PresentationSnapshot,
+        /// Seat whose action was accepted.
+        actor: Seat,
+        /// Street on which the action was accepted.
+        street: Street,
+        /// Accepted betting action.
+        action: BetAction,
+    },
+    /// A complete flop, turn, or river was opened and applied to the rules engine.
+    BoardStreetOpened {
+        /// Complete local state after opening the street.
+        snapshot: PresentationSnapshot,
+        /// Street that was opened.
+        street: Street,
+    },
+    /// One showdown hand passed commitment, receipt, signature, and reveal verification.
+    ShowdownHandOpened {
+        /// Complete local state including every verified showdown row so far.
+        snapshot: PresentationSnapshot,
+        /// Seat whose hand was newly opened.
+        seat: Seat,
+    },
+    /// Deterministic settlement and any required public payout agreement completed.
+    HandFinished(PresentationSnapshot),
+}
+
+impl PresentationEvent {
+    /// Returns the complete local snapshot carried by this event.
+    #[must_use]
+    pub const fn snapshot(&self) -> &PresentationSnapshot {
+        match self {
+            Self::HandStarted(snapshot)
+            | Self::LocalHoleCardsOpened(snapshot)
+            | Self::BettingActionAccepted { snapshot, .. }
+            | Self::BoardStreetOpened { snapshot, .. }
+            | Self::ShowdownHandOpened { snapshot, .. }
+            | Self::HandFinished(snapshot) => snapshot,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct BoardRevealState {
     phase: HandPhase,
@@ -269,6 +463,7 @@ pub struct PeerSession {
     latest_checkpoint: Option<CertifiedCheckpoint>,
     finished_emitted: bool,
     effects: VecDeque<HostEffect>,
+    presentation_events: VecDeque<PresentationEvent>,
 }
 
 impl PeerSession {
@@ -355,7 +550,7 @@ impl PeerSession {
         Self::validate_starting_stacks(&config, &starting_stacks)?;
         Self::validate_deal_plan(&config, &deal_plan)?;
         let roster_len = config.roster().len();
-        Ok(Self {
+        let mut session = Self {
             cryptography: HandCryptography::new(config.clone(), hand),
             transcript: PublicTranscript::new(config.clone(), hand),
             config,
@@ -383,7 +578,13 @@ impl PeerSession {
             latest_checkpoint: None,
             finished_emitted: false,
             effects: VecDeque::new(),
-        })
+            presentation_events: VecDeque::new(),
+        };
+        let snapshot = session.presentation_snapshot()?;
+        session
+            .presentation_events
+            .push_back(PresentationEvent::HandStarted(snapshot));
+        Ok(session)
     }
 
     /// Starts or resumes local progress until host input is required.
@@ -442,7 +643,7 @@ impl PeerSession {
                         false
                     }
                 }
-                PeerPhase::Complete => self.emit_finished(),
+                PeerPhase::Complete => self.emit_finished()?,
                 PeerPhase::KeySetup | PeerPhase::Shuffle => false,
             };
             if !emitted {
@@ -753,6 +954,14 @@ impl PeerSession {
         self.effects.drain(..).collect()
     }
 
+    /// Removes and returns all pending player-visible events in transition order.
+    ///
+    /// This queue is independent from [`Self::drain_effects`]. Draining presentation
+    /// state never acknowledges transport, persistence, action-request, or settlement work.
+    pub fn drain_presentation_events(&mut self) -> Vec<PresentationEvent> {
+        self.presentation_events.drain(..).collect()
+    }
+
     fn phase(&self) -> PeerPhase {
         if self.registered_keys < self.config.roster().len() {
             PeerPhase::KeySetup
@@ -878,6 +1087,9 @@ impl PeerSession {
         )?;
         self.local_hole_cards = Some(cards);
         self.local_receipt_digest = Some(receipt_digest);
+        let snapshot = self.presentation_snapshot()?;
+        self.presentation_events
+            .push_back(PresentationEvent::LocalHoleCardsOpened(snapshot));
         Ok(())
     }
 
@@ -1026,9 +1238,9 @@ impl PeerSession {
         Ok(true)
     }
 
-    fn emit_finished(&mut self) -> bool {
+    fn emit_finished(&mut self) -> Result<bool> {
         if self.finished_emitted {
-            return false;
+            return Ok(false);
         }
         let final_stacks = self
             .holdem
@@ -1036,14 +1248,17 @@ impl PeerSession {
             .and_then(HoldemHand::result)
             .map(|result| result.final_stacks().to_vec())
             .unwrap_or_default();
+        let snapshot = self.presentation_snapshot()?;
         self.effects
             .push_back(HostEffect::Finished(FinishedHand::new(
                 self.hand,
                 self.transcript.anchor(),
                 final_stacks,
             )));
+        self.presentation_events
+            .push_back(PresentationEvent::HandFinished(snapshot));
         self.finished_emitted = true;
-        true
+        Ok(true)
     }
 
     fn apply_bet(&mut self, message: SignedPublicMessage) -> Result<()> {
@@ -1056,25 +1271,35 @@ impl PeerSession {
         let PublicPayload::Bet { street, action } = message.payload() else {
             return Err(protocol("expected a betting payload"));
         };
+        let street = *street;
+        let action = *action;
         if message.sender() != expected {
             return Err(protocol(format!(
                 "expected betting action from {expected}, got {}",
                 message.sender()
             )));
         }
-        if message.phase() != hand_phase_for_street(*street) {
+        if message.phase() != hand_phase_for_street(street) {
             return Err(protocol("betting message phase does not match its street"));
         }
-        if holdem.progress() != HandProgress::Betting(*street) {
+        if holdem.progress() != HandProgress::Betting(street) {
             return Err(protocol("betting action is for another street"));
         }
 
         let mut candidate = holdem.clone();
-        candidate.apply_action(expected, *action)?;
+        candidate.apply_action(expected, action)?;
         self.transcript.append(message)?;
         self.holdem = Some(candidate);
         self.requested_action = None;
         self.settle_uncontested_if_ready()?;
+        let snapshot = self.presentation_snapshot()?;
+        self.presentation_events
+            .push_back(PresentationEvent::BettingActionAccepted {
+                snapshot,
+                actor: expected,
+                street,
+                action,
+            });
         Ok(())
     }
 
@@ -1275,13 +1500,14 @@ impl PeerSession {
             .holdem
             .as_mut()
             .ok_or_else(|| protocol("betting hand is not initialized"))?;
-        match reveal.phase {
+        let street = match reveal.phase {
             HandPhase::FlopReveal => {
                 let flop: [Card; 3] = reveal
                     .opened_cards
                     .try_into()
                     .map_err(|_| protocol("flop reveal did not open three cards"))?;
                 holdem.open_flop(flop)?;
+                Street::Flop
             }
             HandPhase::TurnReveal => {
                 let [turn] = reveal
@@ -1289,6 +1515,7 @@ impl PeerSession {
                     .try_into()
                     .map_err(|_| protocol("turn reveal did not open one card"))?;
                 holdem.open_turn(turn)?;
+                Street::Turn
             }
             HandPhase::RiverReveal => {
                 let [river] = reveal
@@ -1296,9 +1523,13 @@ impl PeerSession {
                     .try_into()
                     .map_err(|_| protocol("river reveal did not open one card"))?;
                 holdem.open_river(river)?;
+                Street::River
             }
             _ => return Err(protocol("unexpected community-card reveal phase")),
-        }
+        };
+        let snapshot = self.presentation_snapshot()?;
+        self.presentation_events
+            .push_back(PresentationEvent::BoardStreetOpened { snapshot, street });
         Ok(())
     }
 
@@ -1423,7 +1654,14 @@ impl PeerSession {
             expected_receipt_digest,
         )?;
         self.showdown_hands[owner.index()] = Some(cards);
-        self.settle_showdown_if_ready()
+        self.settle_showdown_if_ready()?;
+        let snapshot = self.presentation_snapshot()?;
+        self.presentation_events
+            .push_back(PresentationEvent::ShowdownHandOpened {
+                snapshot,
+                seat: owner,
+            });
+        Ok(())
     }
 
     fn settle_showdown_if_ready(&mut self) -> Result<()> {
@@ -1532,7 +1770,7 @@ impl PeerSession {
         loop {
             let emitted = match self.status().phase() {
                 PeerPhase::Betting(_) => self.emit_action_request()?,
-                PeerPhase::Complete => self.emit_finished(),
+                PeerPhase::Complete => self.emit_finished()?,
                 _ => false,
             };
             if !emitted {
@@ -1562,6 +1800,70 @@ impl PeerSession {
                 _ => HandPhase::Complete,
             },
         )
+    }
+
+    fn presentation_snapshot(&self) -> Result<PresentationSnapshot> {
+        let phase = self.phase();
+        let board = self
+            .board
+            .iter()
+            .map(|opened| opened.card())
+            .collect::<Vec<_>>();
+        let mut showdown_hands = Vec::new();
+        for (index, hole_cards) in self.showdown_hands.iter().copied().enumerate() {
+            let Some(hole_cards) = hole_cards else {
+                continue;
+            };
+            let mut cards = Vec::with_capacity(2 + board.len());
+            cards.extend_from_slice(&hole_cards);
+            cards.extend_from_slice(&board);
+            showdown_hands.push(OpenedShowdownHand {
+                seat: Seat::new(index).expect("roster index fits in a seat"),
+                hole_cards,
+                category: evaluate_best(&cards)?.category(),
+            });
+        }
+
+        let (pot, stacks, final_stacks) = if let Some(holdem) = self.holdem.as_ref() {
+            if phase == PeerPhase::Complete {
+                let result = holdem
+                    .result()
+                    .ok_or_else(|| protocol("complete hand has no final result"))?;
+                let final_stacks = result.final_stacks().to_vec();
+                (Chips::ZERO, final_stacks.clone(), Some(final_stacks))
+            } else {
+                let stacks = (0..self.config.roster().len())
+                    .map(|index| {
+                        holdem
+                            .ledger()
+                            .stack(Seat::new(index).expect("roster index fits in a seat"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                (holdem.ledger().pot()?, stacks, None)
+            }
+        } else {
+            (Chips::ZERO, self.starting_stacks.clone(), None)
+        };
+
+        Ok(PresentationSnapshot {
+            hand: self.hand,
+            phase,
+            local_seat: self.local_seat,
+            button: self.deal_plan.button(),
+            street: match phase {
+                PeerPhase::Betting(street) => Some(street),
+                _ => None,
+            },
+            next_actor: self.holdem.as_ref().and_then(HoldemHand::next_to_act),
+            small_blind: self.config.small_blind(),
+            big_blind: self.config.big_blind(),
+            pot,
+            stacks,
+            board,
+            local_hole_cards: self.local_hole_cards,
+            showdown_hands,
+            final_stacks,
+        })
     }
 
     fn hole_card_receipts(&self) -> Result<HoleCardReceipts> {
@@ -1661,6 +1963,7 @@ mod tests {
     enum ActionPolicy {
         Fold,
         CallOrCheck,
+        StopAtFirstAction,
     }
 
     // Records host-visible side effects that would normally leave the peer process.
@@ -1670,6 +1973,7 @@ mod tests {
     struct HostObservations {
         persisted_anchors: Vec<Vec<TranscriptAnchor>>,
         finished: Vec<Vec<FinishedHand>>,
+        presentation_events: Vec<Vec<PresentationEvent>>,
         recoveries: Vec<(usize, RecoveryBundle)>,
     }
 
@@ -1679,6 +1983,7 @@ mod tests {
     struct E2eRun {
         sessions: Vec<PeerSession>,
         observations: HostObservations,
+        initial_total: Chips,
     }
 
     impl E2eRun {
@@ -1710,7 +2015,7 @@ mod tests {
                 .copied()
                 .try_fold(Chips::ZERO, Chips::checked_add)
                 .expect("final stacks conserve chips");
-            assert_eq!(total, Chips::from_units(300));
+            assert_eq!(total, self.initial_total);
 
             assert!(self.observations.finished.iter().all(|effects| {
                 effects
@@ -1752,9 +2057,11 @@ mod tests {
         .unwrap()
     }
 
-    fn sessions() -> Vec<PeerSession> {
+    fn sessions(player_count: usize) -> Vec<PeerSession> {
         let mut rng = StdRng::from_seed([0x91; 32]);
-        let seeds = [[1; 32], [2; 32], [3; 32]];
+        let seeds = (1..=player_count)
+            .map(|value| [u8::try_from(value).expect("test player count fits u8"); 32])
+            .collect::<Vec<_>>();
         let config = config(&seeds, &mut rng);
         seeds
             .into_iter()
@@ -1811,6 +2118,7 @@ mod tests {
                                 BetAction::Check
                             }
                             ActionPolicy::CallOrCheck => BetAction::Call,
+                            ActionPolicy::StopAtFirstAction => continue,
                         };
                         sessions[sender_index].submit_action(action).unwrap();
                         sessions[sender_index].progress(rng).unwrap();
@@ -1832,11 +2140,12 @@ mod tests {
         }
     }
 
-    fn drive(action_policy: ActionPolicy) -> E2eRun {
-        let mut sessions = sessions();
+    fn drive(player_count: usize, action_policy: ActionPolicy) -> E2eRun {
+        let mut sessions = sessions(player_count);
         let mut observations = HostObservations {
             persisted_anchors: vec![Vec::new(); sessions.len()],
             finished: vec![Vec::new(); sessions.len()],
+            presentation_events: vec![Vec::new(); sessions.len()],
             recoveries: Vec::new(),
         };
         let mut rng = StdRng::from_seed([0xA5; 32]);
@@ -1923,14 +2232,20 @@ mod tests {
                 }
             }
         }
+        for (index, session) in sessions.iter_mut().enumerate() {
+            observations.presentation_events[index] = session.drain_presentation_events();
+        }
         E2eRun {
             sessions,
             observations,
+            initial_total: Chips::from_units(
+                u64::try_from(player_count).expect("test player count fits u64") * 100,
+            ),
         }
     }
 
     fn drive_to_uncontested_finish() -> E2eRun {
-        drive(ActionPolicy::Fold)
+        drive(3, ActionPolicy::Fold)
     }
 
     fn final_stacks(session: &PeerSession) -> Vec<Chips> {
@@ -2060,7 +2375,7 @@ mod tests {
 
     #[test]
     fn peers_reveal_board_and_finish_contested_showdown() {
-        let run = drive(ActionPolicy::CallOrCheck);
+        let run = drive(3, ActionPolicy::CallOrCheck);
         run.assert_converged();
         assert!(
             run.sessions
@@ -2077,8 +2392,185 @@ mod tests {
     }
 
     #[test]
+    fn two_peers_emit_private_verified_snapshots_through_contested_showdown() {
+        let run = drive(2, ActionPolicy::CallOrCheck);
+        run.assert_converged();
+
+        let expected_final = final_stacks(&run.sessions[0]);
+        let expected_total = expected_final
+            .iter()
+            .copied()
+            .try_fold(Chips::ZERO, Chips::checked_add)
+            .expect("final stacks conserve chips");
+        assert_eq!(expected_total, Chips::from_units(200));
+
+        let event_kinds = run
+            .observations
+            .presentation_events
+            .iter()
+            .map(|events| {
+                events
+                    .iter()
+                    .map(std::mem::discriminant)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(event_kinds[0], event_kinds[1]);
+
+        let mut accepted_by_peer = Vec::new();
+        let mut boards_by_peer = Vec::new();
+        let mut showdown_by_peer = Vec::new();
+        for (peer_index, events) in run.observations.presentation_events.iter().enumerate() {
+            let local_cards = run.sessions[peer_index]
+                .local_hole_cards()
+                .expect("local cards opened");
+            let mut hand_started_count = 0;
+            let mut local_hole_cards_opened_count = 0;
+            let mut accepted = Vec::new();
+            let mut boards = Vec::new();
+            let mut showdown_counts = Vec::new();
+            let mut hand_finished_count = 0;
+            let mut finished = None;
+
+            for event in events {
+                let snapshot = event.snapshot();
+                assert_eq!(snapshot.local_seat().index(), peer_index);
+                assert_eq!(snapshot.stacks().len(), 2);
+                assert!(
+                    snapshot
+                        .local_hole_cards()
+                        .is_none_or(|cards| cards == local_cards)
+                );
+                let visible_total = snapshot
+                    .stacks()
+                    .iter()
+                    .copied()
+                    .try_fold(snapshot.pot(), Chips::checked_add)
+                    .expect("snapshot conserves chips");
+                assert_eq!(visible_total, Chips::from_units(200));
+
+                match event {
+                    PresentationEvent::HandStarted(snapshot) => {
+                        hand_started_count += 1;
+                        assert_eq!(snapshot.phase(), PeerPhase::KeySetup);
+                        assert!(snapshot.local_hole_cards().is_none());
+                        assert!(snapshot.showdown_hands().is_empty());
+                    }
+                    PresentationEvent::LocalHoleCardsOpened(snapshot) => {
+                        local_hole_cards_opened_count += 1;
+                        assert_eq!(snapshot.local_hole_cards(), Some(local_cards));
+                        assert!(snapshot.showdown_hands().is_empty());
+                    }
+                    PresentationEvent::BettingActionAccepted {
+                        snapshot,
+                        actor,
+                        street,
+                        action,
+                    } => {
+                        assert!(snapshot.showdown_hands().is_empty());
+                        accepted.push((
+                            *actor,
+                            *street,
+                            *action,
+                            snapshot.pot(),
+                            snapshot.stacks().to_vec(),
+                            snapshot.board().to_vec(),
+                        ));
+                    }
+                    PresentationEvent::BoardStreetOpened { snapshot, street } => {
+                        assert!(snapshot.showdown_hands().is_empty());
+                        boards.push((*street, snapshot.board().to_vec()));
+                    }
+                    PresentationEvent::ShowdownHandOpened { snapshot, seat } => {
+                        assert!(
+                            snapshot
+                                .showdown_hands()
+                                .iter()
+                                .any(|hand| hand.seat() == *seat)
+                        );
+                        showdown_counts.push(snapshot.showdown_hands().len());
+                    }
+                    PresentationEvent::HandFinished(snapshot) => {
+                        hand_finished_count += 1;
+                        assert_eq!(snapshot.phase(), PeerPhase::Complete);
+                        assert_eq!(snapshot.pot(), Chips::ZERO);
+                        assert_eq!(snapshot.final_stacks(), Some(expected_final.as_slice()));
+                        finished = Some(snapshot.clone());
+                    }
+                }
+            }
+
+            assert_eq!(hand_started_count, 1);
+            assert_eq!(local_hole_cards_opened_count, 1);
+            assert!(!accepted.is_empty());
+            assert_eq!(
+                boards
+                    .iter()
+                    .map(|(_, board)| board.len())
+                    .collect::<Vec<_>>(),
+                vec![3, 4, 5]
+            );
+            assert_eq!(showdown_counts, vec![1, 2]);
+            assert_eq!(hand_finished_count, 1);
+            let finished = finished.expect("presentation finish");
+            assert_eq!(finished.showdown_hands().len(), 2);
+            assert!(
+                finished
+                    .showdown_hands()
+                    .iter()
+                    .all(|hand| hand.hole_cards() != local_cards
+                        || hand.seat().index() == peer_index)
+            );
+
+            accepted_by_peer.push(accepted);
+            boards_by_peer.push(boards);
+            showdown_by_peer.push(finished.showdown_hands().to_vec());
+        }
+
+        assert_eq!(accepted_by_peer[0], accepted_by_peer[1]);
+        assert_eq!(boards_by_peer[0], boards_by_peer[1]);
+        assert_eq!(showdown_by_peer[0], showdown_by_peer[1]);
+        assert_ne!(
+            run.sessions[0].local_hole_cards(),
+            run.sessions[1].local_hole_cards()
+        );
+    }
+
+    #[test]
+    fn rejected_action_emits_no_accepted_presentation_event() {
+        let mut run = drive(2, ActionPolicy::StopAtFirstAction);
+        assert!(run.sessions.iter().all(|session| {
+            matches!(
+                session.status().phase(),
+                PeerPhase::Betting(Street::Preflop)
+            )
+        }));
+        assert!(run.observations.presentation_events.iter().all(|events| {
+            events
+                .iter()
+                .all(|event| !matches!(event, PresentationEvent::BettingActionAccepted { .. }))
+        }));
+
+        let actor_index = run.sessions[0]
+            .status()
+            .next_public_sender()
+            .expect("preflop actor")
+            .index();
+        assert!(
+            run.sessions[actor_index]
+                .submit_action(BetAction::Check)
+                .is_err()
+        );
+        assert!(
+            run.sessions[actor_index]
+                .drain_presentation_events()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn rejects_replayed_public_message() {
-        let mut sessions = sessions();
+        let mut sessions = sessions(3);
         let mut rng = StdRng::from_seed([0xB6; 32]);
         sessions[0].progress(&mut rng).unwrap();
         let message = sessions[0]

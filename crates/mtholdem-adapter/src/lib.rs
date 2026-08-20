@@ -13,19 +13,22 @@
 #![forbid(unsafe_code)]
 
 use mental_card_core::error::{Error, ErrorCategory, Result, protocol};
-use mtholdem::betting::{ActionContext, BetAction, LegalActions};
+use mtholdem::betting::{ActionContext, BetAction, LegalActions, Street};
 use mtholdem::checkpoint::{CertifiedCheckpoint, CheckpointState};
 use mtholdem::recovery::RecoveryBundle;
 use mtholdem::transcript::TranscriptAnchor;
 use mtholdem::wire::{ShowdownBundle, SignedPrivateReveal, SignedPublicMessage};
-use mtholdem::{Chips, HandNumber, Seat};
-use mtholdem_peer::{FinishedHand, HostEffect, PeerPhase, PeerStatus};
+use mtholdem::{Card, Chips, HandNumber, Seat};
+use mtholdem_peer::{
+    FinishedHand, HostEffect, OpenedShowdownHand, PeerPhase, PeerStatus, PresentationEvent,
+    PresentationSnapshot,
+};
 
 /// Major version of the stable host boundary.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 
 /// Minor version of the stable host boundary.
-pub const ABI_VERSION_MINOR: u32 = 1;
+pub const ABI_VERSION_MINOR: u32 = 2;
 
 /// Patch version of the stable host boundary.
 pub const ABI_VERSION_PATCH: u32 = 0;
@@ -440,6 +443,338 @@ impl From<ActionContext> for BoundaryActionContext {
     }
 }
 
+/// Player-visible peer presentation event kind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum BoundaryPresentationEventKind {
+    /// A peer session was validated and created for one hand.
+    HandStarted = 1,
+    /// The local peer opened its private hole cards.
+    LocalHoleCardsOpened = 2,
+    /// A signed betting action passed native validation.
+    BettingActionAccepted = 3,
+    /// A complete flop, turn, or river was opened.
+    BoardStreetOpened = 4,
+    /// One cryptographically verified showdown hand was opened.
+    ShowdownHandOpened = 5,
+    /// The hand reached deterministic completion.
+    HandFinished = 6,
+}
+
+/// One target-neutral opened showdown row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundaryOpenedShowdownHand {
+    seat: u8,
+    hole_cards: [u8; 2],
+    category: u8,
+}
+
+impl BoundaryOpenedShowdownHand {
+    /// Returns the disclosed seat index.
+    #[must_use]
+    pub const fn seat(self) -> u8 {
+        self.seat
+    }
+
+    /// Returns the two disclosed cards as standard card indices.
+    #[must_use]
+    pub const fn hole_cards(self) -> [u8; 2] {
+        self.hole_cards
+    }
+
+    /// Returns the `mtholdem::HandCategory` discriminant.
+    #[must_use]
+    pub const fn category(self) -> u8 {
+        self.category
+    }
+}
+
+impl From<OpenedShowdownHand> for BoundaryOpenedShowdownHand {
+    fn from(value: OpenedShowdownHand) -> Self {
+        Self {
+            seat: value.seat().to_u8(),
+            hole_cards: value.hole_cards().map(card_index),
+            category: value.category() as u8,
+        }
+    }
+}
+
+/// Complete verified local snapshot encoded for target wrappers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundaryPresentationSnapshot {
+    hand: u64,
+    phase: BoundaryPeerPhase,
+    local_seat: u8,
+    button_seat: u8,
+    street: Option<u32>,
+    next_actor: Option<u8>,
+    small_blind_units: u64,
+    big_blind_units: u64,
+    pot_units: u64,
+    stacks_units: Vec<u64>,
+    board_cards: Vec<u8>,
+    local_hole_cards: Option<[u8; 2]>,
+    showdown_hands: Vec<BoundaryOpenedShowdownHand>,
+    final_stacks_units: Option<Vec<u64>>,
+}
+
+impl BoundaryPresentationSnapshot {
+    /// Returns the hand number.
+    #[must_use]
+    pub const fn hand(&self) -> u64 {
+        self.hand
+    }
+
+    /// Returns the target-neutral peer phase.
+    #[must_use]
+    pub const fn phase(&self) -> BoundaryPeerPhase {
+        self.phase
+    }
+
+    /// Returns the local seat index.
+    #[must_use]
+    pub const fn local_seat(&self) -> u8 {
+        self.local_seat
+    }
+
+    /// Returns the dealer button seat index.
+    #[must_use]
+    pub const fn button_seat(&self) -> u8 {
+        self.button_seat
+    }
+
+    /// Returns the active betting-street discriminant, when applicable.
+    #[must_use]
+    pub const fn street(&self) -> Option<u32> {
+        self.street
+    }
+
+    /// Returns the next betting actor, when applicable.
+    #[must_use]
+    pub const fn next_actor(&self) -> Option<u8> {
+        self.next_actor
+    }
+
+    /// Returns the small blind in chip units.
+    #[must_use]
+    pub const fn small_blind_units(&self) -> u64 {
+        self.small_blind_units
+    }
+
+    /// Returns the big blind in chip units.
+    #[must_use]
+    pub const fn big_blind_units(&self) -> u64 {
+        self.big_blind_units
+    }
+
+    /// Returns the current unsettled pot in chip units.
+    #[must_use]
+    pub const fn pot_units(&self) -> u64 {
+        self.pot_units
+    }
+
+    /// Returns current stacks in table seat order.
+    #[must_use]
+    pub fn stacks_units(&self) -> &[u64] {
+        &self.stacks_units
+    }
+
+    /// Returns opened board-card indices.
+    #[must_use]
+    pub fn board_cards(&self) -> &[u8] {
+        &self.board_cards
+    }
+
+    /// Returns only the local peer's two hole-card indices, once opened.
+    #[must_use]
+    pub const fn local_hole_cards(&self) -> Option<[u8; 2]> {
+        self.local_hole_cards
+    }
+
+    /// Returns cryptographically opened showdown rows.
+    #[must_use]
+    pub fn showdown_hands(&self) -> &[BoundaryOpenedShowdownHand] {
+        &self.showdown_hands
+    }
+
+    /// Returns final stacks after completion.
+    #[must_use]
+    pub fn final_stacks_units(&self) -> Option<&[u64]> {
+        self.final_stacks_units.as_deref()
+    }
+}
+
+impl From<&PresentationSnapshot> for BoundaryPresentationSnapshot {
+    fn from(value: &PresentationSnapshot) -> Self {
+        Self {
+            hand: value.hand().to_u64(),
+            phase: value.phase().into(),
+            local_seat: value.local_seat().to_u8(),
+            button_seat: value.button().to_u8(),
+            street: value.street().map(street_code),
+            next_actor: value.next_actor().map(Seat::to_u8),
+            small_blind_units: value.small_blind().units(),
+            big_blind_units: value.big_blind().units(),
+            pot_units: value.pot().units(),
+            stacks_units: value.stacks().iter().map(|chips| chips.units()).collect(),
+            board_cards: value.board().iter().copied().map(card_index).collect(),
+            local_hole_cards: value.local_hole_cards().map(|cards| cards.map(card_index)),
+            showdown_hands: value
+                .showdown_hands()
+                .iter()
+                .copied()
+                .map(BoundaryOpenedShowdownHand::from)
+                .collect(),
+            final_stacks_units: value
+                .final_stacks()
+                .map(|stacks| stacks.iter().map(|chips| chips.units()).collect()),
+        }
+    }
+}
+
+/// Accepted betting action attached to a presentation event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundaryAcceptedAction {
+    actor: u8,
+    street: u32,
+    action: BoundaryAction,
+}
+
+impl BoundaryAcceptedAction {
+    /// Returns the acting seat index.
+    #[must_use]
+    pub const fn actor(self) -> u8 {
+        self.actor
+    }
+
+    /// Returns the betting-street discriminant.
+    #[must_use]
+    pub const fn street(self) -> u32 {
+        self.street
+    }
+
+    /// Returns the accepted betting action.
+    #[must_use]
+    pub const fn action(self) -> BoundaryAction {
+        self.action
+    }
+}
+
+/// Target-neutral player-visible peer event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundaryPresentationEvent {
+    kind: BoundaryPresentationEventKind,
+    snapshot: BoundaryPresentationSnapshot,
+    accepted_action: Option<BoundaryAcceptedAction>,
+    opened_street: Option<u32>,
+    showdown_seat: Option<u8>,
+}
+
+impl BoundaryPresentationEvent {
+    /// Returns the event kind.
+    #[must_use]
+    pub const fn kind(&self) -> BoundaryPresentationEventKind {
+        self.kind
+    }
+
+    /// Returns the complete verified local snapshot.
+    #[must_use]
+    pub const fn snapshot(&self) -> &BoundaryPresentationSnapshot {
+        &self.snapshot
+    }
+
+    /// Returns accepted action data for a betting-action event.
+    #[must_use]
+    pub const fn accepted_action(&self) -> Option<BoundaryAcceptedAction> {
+        self.accepted_action
+    }
+
+    /// Returns the opened street for a board event.
+    #[must_use]
+    pub const fn opened_street(&self) -> Option<u32> {
+        self.opened_street
+    }
+
+    /// Returns the newly disclosed seat for a showdown event.
+    #[must_use]
+    pub const fn showdown_seat(&self) -> Option<u8> {
+        self.showdown_seat
+    }
+}
+
+/// Converts one typed peer presentation event into the target-neutral boundary.
+pub fn encode_presentation_event(event: &PresentationEvent) -> Result<BoundaryPresentationEvent> {
+    let snapshot = BoundaryPresentationSnapshot::from(event.snapshot());
+    Ok(match event {
+        PresentationEvent::HandStarted(_) => BoundaryPresentationEvent {
+            kind: BoundaryPresentationEventKind::HandStarted,
+            snapshot,
+            accepted_action: None,
+            opened_street: None,
+            showdown_seat: None,
+        },
+        PresentationEvent::LocalHoleCardsOpened(_) => BoundaryPresentationEvent {
+            kind: BoundaryPresentationEventKind::LocalHoleCardsOpened,
+            snapshot,
+            accepted_action: None,
+            opened_street: None,
+            showdown_seat: None,
+        },
+        PresentationEvent::BettingActionAccepted {
+            actor,
+            street,
+            action,
+            ..
+        } => BoundaryPresentationEvent {
+            kind: BoundaryPresentationEventKind::BettingActionAccepted,
+            snapshot,
+            accepted_action: Some(BoundaryAcceptedAction {
+                actor: actor.to_u8(),
+                street: street_code(*street),
+                action: (*action).into(),
+            }),
+            opened_street: None,
+            showdown_seat: None,
+        },
+        PresentationEvent::BoardStreetOpened { street, .. } => BoundaryPresentationEvent {
+            kind: BoundaryPresentationEventKind::BoardStreetOpened,
+            snapshot,
+            accepted_action: None,
+            opened_street: Some(street_code(*street)),
+            showdown_seat: None,
+        },
+        PresentationEvent::ShowdownHandOpened { seat, .. } => BoundaryPresentationEvent {
+            kind: BoundaryPresentationEventKind::ShowdownHandOpened,
+            snapshot,
+            accepted_action: None,
+            opened_street: None,
+            showdown_seat: Some(seat.to_u8()),
+        },
+        PresentationEvent::HandFinished(_) => BoundaryPresentationEvent {
+            kind: BoundaryPresentationEventKind::HandFinished,
+            snapshot,
+            accepted_action: None,
+            opened_street: None,
+            showdown_seat: None,
+        },
+        _ => {
+            return Err(protocol(
+                "mtholdem-adapter does not know how to encode this presentation event",
+            ));
+        }
+    })
+}
+
+/// Converts typed peer presentation events into target-neutral boundary values.
+pub fn encode_presentation_events(
+    events: impl IntoIterator<Item = PresentationEvent>,
+) -> Result<Vec<BoundaryPresentationEvent>> {
+    events
+        .into_iter()
+        .map(|event| encode_presentation_event(&event))
+        .collect()
+}
+
 /// Host effect kind for byte-oriented adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -738,6 +1073,14 @@ pub const fn hand_number_from_u64(value: u64) -> HandNumber {
     HandNumber::from_u64(value)
 }
 
+const fn street_code(street: Street) -> u32 {
+    street as u32
+}
+
+fn card_index(card: Card) -> u8 {
+    u8::try_from(card.to_index()).expect("standard card index fits u8")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,16 +1119,41 @@ mod tests {
         )?;
         ledger.post_forced_bet(Seat::new(2)?, Chips::from_units(1))?;
         ledger.post_forced_bet(Seat::new(0)?, Chips::from_units(2))?;
-        let round = BettingRound::new(
-            ledger,
-            mtholdem::betting::Street::Preflop,
-            Seat::new(1)?,
-            Chips::from_units(2),
-        )?;
+        let round =
+            BettingRound::new(ledger, Street::Preflop, Seat::new(1)?, Chips::from_units(2))?;
 
         let context = BoundaryActionContext::from(round.action_context()?);
 
         assert_eq!(context.button_seat(), button.to_u8());
+        Ok(())
+    }
+
+    #[test]
+    fn initial_presentation_event_encodes_complete_snapshot() -> Result<()> {
+        let table = mtholdem_testkit::TestTable::standard(2, [8; 32])?;
+        let seat = Seat::new(0)?;
+        let mut peer = PeerSession::new(
+            table.config().clone(),
+            IdentitySecret::from_seed(table.identity(seat)?.to_seed().expose()),
+            seat,
+            HandNumber::FIRST,
+        )?;
+
+        let events = encode_presentation_events(peer.drain_presentation_events())?;
+        let [event] = events.as_slice() else {
+            panic!("expected one hand-started presentation event");
+        };
+        assert_eq!(event.kind(), BoundaryPresentationEventKind::HandStarted);
+        let snapshot = event.snapshot();
+        assert_eq!(snapshot.hand(), HandNumber::FIRST.to_u64());
+        assert_eq!(snapshot.phase(), BoundaryPeerPhase::KeySetup);
+        assert_eq!(snapshot.local_seat(), 0);
+        assert_eq!(snapshot.stacks_units(), &[100, 100]);
+        assert_eq!(snapshot.pot_units(), 0);
+        assert!(snapshot.board_cards().is_empty());
+        assert!(snapshot.local_hole_cards().is_none());
+        assert!(snapshot.showdown_hands().is_empty());
+        assert!(snapshot.final_stacks_units().is_none());
         Ok(())
     }
 
