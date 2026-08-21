@@ -3,14 +3,14 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
 fn cxx_header_compiles_links_and_checks_layout() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let include_dir = manifest_dir.join("include");
-    let target_dir = target_profile_dir(&manifest_dir);
+    let target_dir = target_profile_dir();
     let target_deps_dir = target_dir.join("deps");
     let work_dir = env::temp_dir().join(format!("mtholdem-header-smoke-{}", std::process::id()));
     fs::create_dir_all(&work_dir).expect("create header smoke work dir");
@@ -53,17 +53,20 @@ fn cxx_header_compiles_links_and_checks_layout() {
     assert!(run_status.success(), "C++ header smoke binary failed");
 }
 
-fn target_profile_dir(manifest_dir: &Path) -> PathBuf {
-    if let Some(target_dir) = env::var_os("CARGO_TARGET_DIR") {
-        return PathBuf::from(target_dir).join("debug");
-    }
-    manifest_dir
+fn target_profile_dir() -> PathBuf {
+    let test_binary = env::current_exe().expect("resolve header smoke test executable");
+    let deps_dir = test_binary
         .parent()
-        .expect("crate directory has workspace crates parent")
+        .expect("header smoke test executable has a parent directory");
+    assert_eq!(
+        deps_dir.file_name().and_then(|name| name.to_str()),
+        Some("deps"),
+        "header smoke test executable is not under a Cargo profile deps directory"
+    );
+    deps_dir
         .parent()
-        .expect("workspace crates directory has root parent")
-        .join("target")
-        .join("debug")
+        .expect("Cargo profile deps directory has a profile parent")
+        .to_path_buf()
 }
 
 const HEADER_SMOKE_CPP: &str = r#"
