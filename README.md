@@ -1,5 +1,7 @@
 # mtholdem workspace - Mental Texas Hold'em for Rust
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gaato/mtholdem)
+
 This repository is a **Sans-I/O Rust workspace** for building peer-to-peer Texas
 Hold'em without a trusted dealer. It separates reusable encrypted-card
 operations, Hold'em protocol rules, peer-session orchestration, byte-oriented
