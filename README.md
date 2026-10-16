@@ -15,8 +15,6 @@ adapter boundaries, and deterministic test fixtures into separate crates.
 
 Japanese README: [README.ja.md](README.ja.md)
 
-API documentation for `main`: <https://gaato.github.io/mtholdem/>
-
 ## Workspace Layout
 
 | crate | Purpose |
